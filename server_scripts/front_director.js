@@ -698,9 +698,17 @@ function fdTellPlayer(server, player, text, color) {
   fdCmd(server, 'tellraw ' + String(player.username) + ' ' + message)
 }
 
+function fdMapGet(map, key) {
+  if (map == null) return null
+  try { return map.get(String(key)) } catch (ignored) {}
+  try { return map[String(key)] } catch (ignored) {}
+  return null
+}
+
 function fdCostFor(kind, level) {
-  var table = fdConfig.economy && fdConfig.economy[kind] ? fdConfig.economy[kind] : null
-  if (table && table[String(level)]) return table[String(level)]
+  var table = fdConfig.economy ? fdMapGet(fdConfig.economy, kind) : null
+  var configured = fdMapGet(table, String(level))
+  if (configured != null) return configured
   if (kind === 'garrison') {
     if (level === 1) return {'minecraft:emerald': 8, 'minecraft:iron_ingot': 16}
     if (level === 2) return {'minecraft:emerald': 12, 'minecraft:iron_ingot': 24}
@@ -711,12 +719,22 @@ function fdCostFor(kind, level) {
 
 function fdPay(server, player, cost) {
   var name = String(player.username)
-  var items = Object.keys(cost)
-  for (var i = 0; i < items.length; i++) {
-    if (fdCmd(server, 'clear ' + name + ' ' + items[i] + ' 0') < Number(cost[items[i]])) return false
+  var entries = []
+  try {
+    var iterator = cost.entrySet().iterator()
+    while (iterator.hasNext()) {
+      var entry = iterator.next()
+      entries.push({item: String(entry.getKey()), count: Number(entry.getValue())})
+    }
+  } catch (ignored) {
+    var keys = Object.keys(cost)
+    for (var k = 0; k < keys.length; k++) entries.push({item: keys[k], count: Number(cost[keys[k]])})
   }
-  for (var j = 0; j < items.length; j++) {
-    fdCmd(server, 'clear ' + name + ' ' + items[j] + ' ' + Number(cost[items[j]]))
+  for (var i = 0; i < entries.length; i++) {
+    if (fdCmd(server, 'clear ' + name + ' ' + entries[i].item + ' 0') < entries[i].count) return false
+  }
+  for (var j = 0; j < entries.length; j++) {
+    fdCmd(server, 'clear ' + name + ' ' + entries[j].item + ' ' + entries[j].count)
   }
   return true
 }
