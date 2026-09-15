@@ -25,6 +25,16 @@ const MC_RARE_SUPPORT = {
   'crusty_chunks:reaper': true
 }
 
+// Enemy factions disabled for this pack. PMC and player-purchased units stay enabled.
+const MC_BLOCKED_FACTION_UNITS = {
+  'simpleenemymod:ruunit': true,
+  'tacz_sewv:ru_medic': true,
+  'tacz_sewv:ru_engineer': true,
+  'tacz_sewv:ru_combat_engineer': true
+}
+
+let mcFactionCleanupTick = 0
+
 function mcEntityId(entity) {
   try { return String(entity.type.arch$registryName()) } catch (ignored) {}
   try { return String(entity.type) } catch (ignored) {}
@@ -72,6 +82,11 @@ EntityEvents.spawned(event => {
   const id = mcEntityId(entity)
   if (!id) return
 
+  if (MC_BLOCKED_FACTION_UNITS[id]) {
+    event.cancel()
+    return
+  }
+
   // Old InControl vanilla-hostile blacklist.
   if (MC_BLOCKED_VANILLA[id]) {
     event.cancel()
@@ -105,5 +120,18 @@ EntityEvents.spawned(event => {
   // Add tag fd_allow_manual to NBT when a map maker intentionally places one.
   if (!mcHasTag(entity, 'fd_robot') && !mcHasTag(entity, 'fd_allow_manual')) {
     event.cancel()
+  }
+})
+
+// Some mod events add entities after Forge's normal spawn checks. A small,
+// infrequent sweep catches those and also removes units saved before this rule.
+ServerEvents.tick(event => {
+  mcFactionCleanupTick++
+  if (mcFactionCleanupTick % 400 !== 0) return
+  const iterator = event.server.overworld().getAllEntities().iterator()
+  while (iterator.hasNext()) {
+    const entity = iterator.next()
+    if (!MC_BLOCKED_FACTION_UNITS[mcEntityId(entity)]) continue
+    try { entity.discard() } catch (ignored) { entity.remove('discarded') }
   }
 })

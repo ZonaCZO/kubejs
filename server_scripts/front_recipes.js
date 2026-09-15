@@ -2,6 +2,12 @@
 // A production line intentionally needs Create machinery and cannot be bypassed
 // in a normal 3x3 crafting table.
 ServerEvents.recipes(event => {
+  // Startup registry changes require a full client restart. During an in-game
+  // script reload, skip the recipe instead of producing an empty-result error.
+  if (!Item.exists('kubejs:military_supply_crate')) {
+    console.warn('[Front Director] Supply crate is not registered yet. Fully restart Minecraft.')
+    return
+  }
   event.recipes.create.mechanical_crafting('kubejs:military_supply_crate', [
     ' ISI ',
     'IPFPI',
