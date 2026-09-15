@@ -372,6 +372,7 @@ function fdLiberateSector(server, sx, sz, liberator) {
   fdOps.protection[key] = fdGameTime(server) + fdOptionNumber('liberationProtectionMinutes', 15) * 60 * 20
   fdOps.alerts[key] = 0
   fdOpsDirty = true
+  if (liberator != null) fdScoreAdd(server, liberator, 'front_sectors', 1)
   fdTell(server, `Сектор ${sx},${sz} освобождён (${who}). Остатки сил Warium уничтожены.`, 'green')
 }
 
@@ -698,6 +699,39 @@ function fdTellPlayer(server, player, text, color) {
   fdCmd(server, 'tellraw ' + String(player.username) + ' ' + message)
 }
 
+function fdStateName(player) {
+  try {
+    var saved = String(player.persistentData.getString('front_state_name'))
+    if (saved.length >= 3) return saved
+  } catch (ignored) {}
+  return String(fdConfig.defaultStateName || 'Новое государство')
+}
+
+function fdSetStateName(player, rawName) {
+  var name = String(rawName || '').replace(/[\x00-\x1F\x7F§]/g, '').trim()
+  if (name.length < 3 || name.length > 32) return false
+  player.persistentData.putString('front_state_name', name)
+  return true
+}
+
+function fdScoreAdd(server, player, objective, amount) {
+  fdCmd(server, 'scoreboard players add ' + String(player.username) + ' ' + objective + ' ' + Math.max(0, Math.floor(Number(amount))))
+}
+
+function fdCostItemCount(cost, wantedItem) {
+  var result = 0
+  try {
+    var iterator = cost.entrySet().iterator()
+    while (iterator.hasNext()) {
+      var entry = iterator.next()
+      if (String(entry.getKey()) === wantedItem) result += Number(entry.getValue())
+    }
+  } catch (ignored) {
+    try { result = Number(cost[wantedItem] || 0) } catch (ignoredAgain) {}
+  }
+  return result
+}
+
 function fdMapGet(map, key) {
   if (map == null) return null
   try { return map.get(String(key)) } catch (ignored) {}
@@ -789,10 +823,12 @@ function fdGarrisonCommand(context, mode) {
   var add = Math.max(0, targetSize - oldSize)
   var sectorTag = 'fd_garrison_' + sx + '_' + sz
   fdSpawnFriendlySquad(server, player, fdConfig.garrisonEntity || 'simpleenemymod:usunit', add, sectorTag)
-  fdOps.garrisons[key] = {level: newLevel, strength: targetSize, maxStrength: targetSize}
+  fdOps.garrisons[key] = {level: newLevel, strength: targetSize, maxStrength: targetSize, stateName: fdStateName(player)}
   fdOpsDirty = true
   fdOpsSave(server)
-  fdTellPlayer(server, player, 'Американская ТрО развёрнута: уровень ' + newLevel + ', бойцов ' + targetSize + '.', 'blue')
+  fdScoreAdd(server, player, 'front_garrison', 1)
+  fdScoreAdd(server, player, 'front_supplies', fdCostItemCount(fdCostFor('garrison', newLevel), 'kubejs:military_supply_crate'))
+  fdTellPlayer(server, player, 'ТрО государства «' + fdStateName(player) + '» развёрнута: уровень ' + newLevel + ', бойцов ' + targetSize + '.', 'blue')
   return 1
 }
 
@@ -812,9 +848,51 @@ function fdCommandoCommand(context) {
   }
   var size = fdOptionNumber('commandoSize', 4)
   fdSpawnFriendlySquad(server, player, fdConfig.commandoEntity || 'simpleenemymod:pmcunit', size, ownerTag)
+  fdScoreAdd(server, player, 'front_commandos', 1)
+  fdScoreAdd(server, player, 'front_supplies', fdCostItemCount(fdCostFor('commando', 1), 'kubejs:military_supply_crate'))
   fdTellPlayer(server, player, 'Отряд коммандос из ' + size + ' бойцов прибыл.', 'green')
   return 1
 }
+
+function fdHqPayload(server, player) {
+  var sx = fdSX(player.x)
+  var sz = fdSZ(player.z)
+  var control = fdControl(sx, sz)
+  var key = fdKey(sx, sz)
+  var terrain = fdSectorTerrain(fdWorld(server), sx, sz)
+  var garrison = fdOps.garrisons[key]
+  var zone = !fdInWarArea(player.x, player.z) ? 'Вне театра войны' :
+    (fdInSafeZone(player.x, player.z) ? 'Безопасная зона' :
+      (fdIsFrontier(sx, sz) ? 'Линия фронта' : (control > 0 ? 'Территория Warium' : 'Свободный сектор')))
+  return {
+    stateName: fdStateName(player), sector: key, control: Math.round(control), zone: zone,
+    terrain: terrain.name, supplied: control > 0 ? fdIsSupplied(sx, sz) : true,
+    garrisonLevel: garrison ? Number(garrison.level) : 0,
+    garrisonStrength: garrison ? Number(garrison.strength) : 0,
+    garrisonMax: garrison ? Number(garrison.maxStrength) : 0
+  }
+}
+
+function fdOpenHq(server, player) {
+  if (!fdInitialized && !fdInitialize(server)) return 0
+  player.sendData('front:hq_data', fdHqPayload(server, player))
+  return 1
+}
+
+NetworkEvents.dataReceived('front:hq_request', event => {
+  var player = event.player
+  var server = player.server
+  if (!fdInitialized && !fdInitialize(server)) return
+  var action = String(event.data.action || 'refresh')
+  if (action === 'garrison') fdCmd(server, 'execute as ' + String(player.username) + ' run front garrison')
+  else if (action === 'upgrade') fdCmd(server, 'execute as ' + String(player.username) + ' run front garrison upgrade')
+  else if (action === 'commando') fdCmd(server, 'execute as ' + String(player.username) + ' run front squad commando')
+  else if (action === 'state_name') {
+    if (fdSetStateName(player, event.data.name)) fdTellPlayer(server, player, 'Название государства изменено на «' + fdStateName(player) + '».', 'green')
+    else fdTellPlayer(server, player, 'Название должно содержать от 3 до 32 символов.', 'red')
+  }
+  fdOpenHq(server, player)
+})
 
 function fdPurgeCommand(context) {
   var source = context.source
@@ -893,6 +971,9 @@ ServerEvents.commandRegistry(event => {
     Commands.literal('front')
       .executes(context => fdStatusCommand(context))
       .then(Commands.literal('status').executes(context => fdStatusCommand(context)))
+      .then(Commands.literal('hq').executes(context => {
+        return context.source.player == null ? 0 : fdOpenHq(context.source.server, context.source.player)
+      }))
       .then(Commands.literal('garrison')
         .executes(context => fdGarrisonCommand(context, 'deploy'))
         .then(Commands.literal('upgrade').executes(context => fdGarrisonCommand(context, 'upgrade')))
@@ -979,6 +1060,10 @@ function fdInitialize(server) {
     fdLoadConfig()
     if (!fdConfig.enabled) return false
     fdCmd(server, 'scoreboard objectives add fd_tmp dummy')
+    fdCmd(server, 'scoreboard objectives add front_sectors dummy')
+    fdCmd(server, 'scoreboard objectives add front_garrison dummy')
+    fdCmd(server, 'scoreboard objectives add front_commandos dummy')
+    fdCmd(server, 'scoreboard objectives add front_supplies dummy')
     fdLoadState(server)
     fdOpsLoad(server)
     fdRebuildSupply()

@@ -1,5 +1,6 @@
 {
   "enabled": true,
+  "defaultStateName": "Новое государство",
   "sectorSize": 256,
   "origins": [
     { "name": "Северный очаг", "x": -620, "z": -411 }
@@ -50,12 +51,12 @@
   "commandoSize": 4,
   "economy": {
     "garrison": {
-      "1": { "minecraft:emerald": 8, "minecraft:iron_ingot": 16 },
-      "2": { "minecraft:emerald": 12, "minecraft:iron_ingot": 24 },
-      "3": { "minecraft:emerald": 16, "minecraft:iron_ingot": 32 }
+      "1": { "kubejs:military_supply_crate": 2 },
+      "2": { "kubejs:military_supply_crate": 3 },
+      "3": { "kubejs:military_supply_crate": 4 }
     },
     "commando": {
-      "1": { "minecraft:emerald": 16, "minecraft:iron_ingot": 24 }
+      "1": { "kubejs:military_supply_crate": 4 }
     }
   },
   "alliedEntities": [
