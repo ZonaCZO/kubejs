@@ -879,6 +879,94 @@ function fdOpenHq(server, player) {
   return 1
 }
 
+function fdXaeroWaypoint(server, player, name, symbol, x, y, z, color) {
+  // Xaero's client recognises this shared-waypoint payload and adds its own
+  // clickable [Add] control. TMP marks operational points that may become stale.
+  var safeName = String(name).replace(/[:\r\n]/g, '_').replace(/ /g, '_')
+  var payload = 'xaero-waypoint:' + safeName + ':' + symbol + ':' +
+    Math.floor(x) + ':' + Math.floor(y) + ':' + Math.floor(z) + ':' +
+    Math.floor(color) + ':false:0:Internal-overworld-waypoints'
+  fdCmd(server, 'tellraw ' + String(player.username) + ' ' + JSON.stringify({text: payload}))
+}
+
+function fdFrontMapCommand(context) {
+  var player = context.source.player
+  if (player == null) return 0
+  var server = context.source.server
+  if (!fdInitialized && !fdInitialize(server)) return 0
+
+  var candidates = []
+  Object.keys(fdState).forEach(key => {
+    var pair = key.split(',')
+    var sx = Number(pair[0])
+    var sz = Number(pair[1])
+    if (!fdIsFrontier(sx, sz)) return
+    var center = fdSectorCenter(sx, sz)
+    var dx = center.x - player.x
+    var dz = center.z - player.z
+    candidates.push({
+      sx: sx, sz: sz, x: center.x, z: center.z,
+      distanceSq: dx * dx + dz * dz,
+      supplied: fdIsSupplied(sx, sz)
+    })
+  })
+  candidates.sort((a, b) => a.distanceSq - b.distanceSq)
+
+  if (candidates.length === 0) {
+    fdTellPlayer(server, player, 'Активная линия фронта пока не обнаружена.', 'gray')
+    return 0
+  }
+
+  var amount = Math.min(5, candidates.length)
+  fdTellPlayer(server, player, 'Ближайшие участки фронта: ' + amount + '. Нажми [Add] в сообщениях Xaero. Метки TMP временные.', 'gold')
+  for (var i = 0; i < amount; i++) {
+    var point = candidates[i]
+    var distance = Math.round(Math.sqrt(point.distanceSq))
+    var color = point.supplied ? 6 : 5 // gold / dark purple
+    var label = point.supplied ? 'TMP_FRONT' : 'TMP_ENCIRCLED'
+    fdXaeroWaypoint(server, player,
+      label + '_' + point.sx + '_' + point.sz + '_' + distance + 'm',
+      point.supplied ? 'F' : 'O', point.x, 90, point.z, color)
+  }
+
+  // Strategic reference points use stable colours: red enemy origin,
+  // green nearest garrison, aqua nearest configured safe base.
+  if (fdConfig.origins && fdConfig.origins.length > 0) {
+    var origin = fdConfig.origins[0]
+    fdXaeroWaypoint(server, player, 'TMP_WARIUM_ORIGIN', 'W', origin.x, 90, origin.z, 4)
+  }
+
+  var nearestGarrison = null
+  Object.keys(fdOps.garrisons).forEach(key => {
+    var pair = key.split(',')
+    var center = fdSectorCenter(Number(pair[0]), Number(pair[1]))
+    var dx = center.x - player.x
+    var dz = center.z - player.z
+    var distanceSq = dx * dx + dz * dz
+    if (nearestGarrison == null || distanceSq < nearestGarrison.distanceSq) {
+      nearestGarrison = {x: center.x, z: center.z, distanceSq: distanceSq}
+    }
+  })
+  if (nearestGarrison != null) {
+    fdXaeroWaypoint(server, player, 'TMP_NEAREST_GARRISON', 'G', nearestGarrison.x, 90, nearestGarrison.z, 10)
+  }
+
+  var nearestBase = null
+  for (var b = 0; b < fdConfig.safeZones.length; b++) {
+    var rect = fdConfig.safeZones[b]
+    var bx = Math.floor((Number(rect.x1) + Number(rect.x2)) / 2)
+    var bz = Math.floor((Number(rect.z1) + Number(rect.z2)) / 2)
+    var bdx = bx - player.x
+    var bdz = bz - player.z
+    var baseDistanceSq = bdx * bdx + bdz * bdz
+    if (nearestBase == null || baseDistanceSq < nearestBase.distanceSq) {
+      nearestBase = {x: bx, z: bz, distanceSq: baseDistanceSq}
+    }
+  }
+  if (nearestBase != null) fdXaeroWaypoint(server, player, 'TMP_SAFE_BASE', 'B', nearestBase.x, 90, nearestBase.z, 11)
+  return amount
+}
+
 NetworkEvents.dataReceived('front:hq_request', event => {
   var player = event.player
   var server = player.server
@@ -974,6 +1062,7 @@ ServerEvents.commandRegistry(event => {
       .then(Commands.literal('hq').executes(context => {
         return context.source.player == null ? 0 : fdOpenHq(context.source.server, context.source.player)
       }))
+      .then(Commands.literal('map').executes(context => fdFrontMapCommand(context)))
       .then(Commands.literal('garrison')
         .executes(context => fdGarrisonCommand(context, 'deploy'))
         .then(Commands.literal('upgrade').executes(context => fdGarrisonCommand(context, 'upgrade')))

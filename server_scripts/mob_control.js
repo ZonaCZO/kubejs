@@ -130,8 +130,8 @@ ServerEvents.tick(event => {
   if (mcFactionCleanupTick % 400 !== 0) return
   const iterator = event.server.overworld().getAllEntities().iterator()
   while (iterator.hasNext()) {
-    const entity = iterator.next()
-    if (!MC_BLOCKED_FACTION_UNITS[mcEntityId(entity)]) continue
-    try { entity.discard() } catch (ignored) { entity.remove('discarded') }
+    const cleanupEntity = iterator.next()
+    if (!MC_BLOCKED_FACTION_UNITS[mcEntityId(cleanupEntity)]) continue
+    try { cleanupEntity.discard() } catch (ignored) { cleanupEntity.remove('discarded') }
   }
 })
