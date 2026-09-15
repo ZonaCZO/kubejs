@@ -21,6 +21,10 @@ var fdTrackedRobots = []
 var fdTrackedSem = []
 var fdEntityScanTick = -999999
 var fdCombatCursor = 0
+var fdTerrainCache = {}
+var fdSupplyCache = {}
+var fdOps = { liberated: {}, protection: {}, garrisons: {}, alerts: {} }
+var fdOpsDirty = false
 
 var FD_AI_INTERVAL = 80 // 4 seconds; low-CPU combat network
 var FD_ENTITY_SCAN_INTERVAL = 400 // full world scan only every 20 seconds
@@ -52,6 +56,31 @@ function fdSX(x) { return Math.floor(x / Number(fdConfig.sectorSize)) }
 function fdSZ(z) { return Math.floor(z / Number(fdConfig.sectorSize)) }
 function fdOptionNumber(name, fallback) {
   return fdConfig[name] == null ? fallback : Number(fdConfig[name])
+}
+
+function fdGameTime(server) {
+  try { return Number(fdWorld(server).getGameTime()) } catch (ignored) { return 0 }
+}
+
+function fdOpsLoad(server) {
+  try {
+    fdOps = server.persistentData.contains('front_director_v6_ops')
+      ? JSON.parse(String(server.persistentData.getString('front_director_v6_ops')))
+      : { liberated: {}, protection: {}, garrisons: {}, alerts: {} }
+  } catch (error) {
+    console.error('[Front Director v6] operations state reset: ' + error)
+    fdOps = { liberated: {}, protection: {}, garrisons: {}, alerts: {} }
+  }
+  if (!fdOps.liberated) fdOps.liberated = {}
+  if (!fdOps.protection) fdOps.protection = {}
+  if (!fdOps.garrisons) fdOps.garrisons = {}
+  if (!fdOps.alerts) fdOps.alerts = {}
+}
+
+function fdOpsSave(server) {
+  if (!fdOpsDirty) return
+  server.persistentData.putString('front_director_v6_ops', JSON.stringify(fdOps))
+  fdOpsDirty = false
 }
 
 function fdRandomFrom(list, fallback) {
@@ -116,6 +145,44 @@ function fdInSafeZone(x, z) {
 function fdAllowedSector(sx, sz) {
   var c = fdSectorCenter(sx, sz)
   return fdInWarArea(c.x, c.z) && !fdInSafeZone(c.x, c.z)
+}
+
+function fdBiomeIdAtLoaded(level, x, z) {
+  if (!level.getChunkSource().hasChunk(x >> 4, z >> 4)) return ''
+  try {
+    var y = level.getHeight(FD_Heightmap.MOTION_BLOCKING_NO_LEAVES, x, z)
+    var holder = level.getBiome(new FD_BlockPos(x, y, z))
+    var key = holder.unwrapKey()
+    if (key.isPresent()) return String(key.get().location())
+  } catch (ignored) {}
+  return ''
+}
+
+function fdSectorTerrain(level, sx, sz) {
+  var key = fdKey(sx, sz)
+  if (fdTerrainCache[key] != null) return fdTerrainCache[key]
+  var size = Number(fdConfig.sectorSize)
+  var startX = sx * size
+  var startZ = sz * size
+  var points = [[0.5,0.5],[0.25,0.25],[0.75,0.25],[0.25,0.75],[0.75,0.75]]
+  var peaks = 0
+  var rivers = 0
+  var known = 0
+  for (var i = 0; i < points.length; i++) {
+    var id = fdBiomeIdAtLoaded(level,
+      Math.floor(startX + size * points[i][0]),
+      Math.floor(startZ + size * points[i][1]))
+    if (!id) continue
+    known++
+    if (id.indexOf('peak') >= 0 || id.indexOf('mountain') >= 0) peaks++
+    if (id.indexOf('river') >= 0) rivers++
+  }
+  // Unknown/unloaded terrain never forces chunk generation on the server thread.
+  var result = { name: 'обычная местность', factor: 1.0 }
+  if (rivers > 0) result = { name: 'река', factor: fdOptionNumber('riverExpansionFactor', 0.20) }
+  else if (peaks > 0) result = { name: 'горы', factor: fdOptionNumber('peakExpansionFactor', 0.35) }
+  if (known > 0) fdTerrainCache[key] = result
+  return result
 }
 
 function fdControl(sx, sz) {
@@ -189,7 +256,49 @@ function fdIsFrontier(sx, sz) {
     fdControl(sx, sz + 1) < 50 || fdControl(sx, sz - 1) < 50
 }
 
+function fdRebuildSupply() {
+  var supplied = {}
+  var queue = []
+  var minimum = fdOptionNumber('supplyControlMinimum', 50)
+  for (var i = 0; i < fdConfig.origins.length; i++) {
+    var sx = fdSX(fdConfig.origins[i].x)
+    var sz = fdSZ(fdConfig.origins[i].z)
+    var key = fdKey(sx, sz)
+    supplied[key] = true
+    queue.push({sx: sx, sz: sz})
+  }
+  var dirs = [[1,0],[-1,0],[0,1],[0,-1]]
+  while (queue.length > 0) {
+    var current = queue.shift()
+    for (var d = 0; d < dirs.length; d++) {
+      var nx = current.sx + dirs[d][0]
+      var nz = current.sz + dirs[d][1]
+      var nk = fdKey(nx, nz)
+      if (supplied[nk] || fdControl(nx, nz) < minimum) continue
+      supplied[nk] = true
+      queue.push({sx: nx, sz: nz})
+    }
+  }
+  fdSupplyCache = supplied
+}
+
+function fdIsSupplied(sx, sz) {
+  return fdSupplyCache[fdKey(sx, sz)] === true
+}
+
+function fdApplyIsolation(server) {
+  fdRebuildSupply()
+  var decay = fdOptionNumber('isolatedControlLossPerCycle', 8)
+  Object.keys(fdState).forEach(key => {
+    if (fdSupplyCache[key]) return
+    var pair = key.split(',')
+    fdSetControl(Number(pair[0]), Number(pair[1]), Number(fdState[key]) - decay)
+  })
+}
+
 function fdStrategicExpansion(server) {
+  var level = fdWorld(server)
+  fdApplyIsolation(server)
   var candidates = []
   var seen = {}
   var dirs = [[1,0],[-1,0],[0,1],[0,-1]]
@@ -205,6 +314,7 @@ function fdStrategicExpansion(server) {
       var nz = sz + dirs[d][1]
       var nk = fdKey(nx, nz)
       if (seen[nk] || !fdAllowedSector(nx, nz) || fdControl(nx, nz) >= 100) continue
+      if (Number(fdOps.protection[nk] || 0) > fdGameTime(server)) continue
       seen[nk] = true
       candidates.push({ sx: nx, sz: nz })
     }
@@ -215,12 +325,22 @@ function fdStrategicExpansion(server) {
   var limit = Math.min(Number(fdConfig.sectorsAdvancedPerCycle), candidates.length)
 
   for (var i = 0; i < limit; i++) {
+    var terrain = fdSectorTerrain(level, candidates[i].sx, candidates[i].sz)
     var strategicGain = Math.max(1, Math.round(Number(fdConfig.expansionControlGain) *
-      fdStrength(candidates[i].sx, candidates[i].sz)))
+      fdStrength(candidates[i].sx, candidates[i].sz) * terrain.factor))
+    var candidateKey = fdKey(candidates[i].sx, candidates[i].sz)
+    var garrison = fdOps.garrisons[candidateKey]
+    if (garrison && Number(garrison.strength) > 0) {
+      strategicGain -= Number(garrison.strength) * fdOptionNumber('garrisonDefensePerSoldier', 3)
+      fdOps.alerts[candidateKey] = Math.min(4, Number(fdOps.alerts[candidateKey] || 0) + 1)
+      fdOpsDirty = true
+      if (strategicGain <= 0) continue
+    }
     fdSetControl(candidates[i].sx, candidates[i].sz,
       fdControl(candidates[i].sx, candidates[i].sz) + strategicGain)
   }
   fdSave(server)
+  fdOpsSave(server)
 }
 
 function fdCount(server, selector) {
@@ -238,6 +358,23 @@ function fdRobotSelector(sx, sz) {
   return `@e[tag=fd_robot,${fdSectorBox(sx, sz)}]`
 }
 
+function fdLiberateSector(server, sx, sz, liberator) {
+  // Only Front Director robots are removed. Players, SEM/PMC soldiers,
+  // villagers and map-maker entities are deliberately untouched.
+  fdCmd(server, `kill ${fdRobotSelector(sx, sz)}`)
+  fdTrackedRobots = fdTrackedRobots.filter(robot => {
+    if (!robot || !robot.isAlive()) return false
+    return fdSX(robot.x) !== sx || fdSZ(robot.z) !== sz
+  })
+  var who = liberator == null ? 'игроком' : String(liberator.username)
+  var key = fdKey(sx, sz)
+  fdOps.liberated[key] = true
+  fdOps.protection[key] = fdGameTime(server) + fdOptionNumber('liberationProtectionMinutes', 15) * 60 * 20
+  fdOps.alerts[key] = 0
+  fdOpsDirty = true
+  fdTell(server, `Сектор ${sx},${sz} освобождён (${who}). Остатки сил Warium уничтожены.`, 'green')
+}
+
 function fdDefenderCount(server, sx, sz) {
   var box = fdSectorBox(sx, sz)
   var total = fdCount(server, `@a[${box}]`)
@@ -251,6 +388,10 @@ function fdIsRobot(entity) {
   var id = String(entity.type)
   for (var i = 0; i < fdConfig.robotEntities.length; i++) {
     if (id === String(fdConfig.robotEntities[i])) return true
+  }
+  var rare = fdConfig.rareSupportEntities || []
+  for (var r = 0; r < rare.length; r++) {
+    if (id === String(rare[r])) return true
   }
   return entity.tags && entity.tags.contains && entity.tags.contains('fd_robot')
 }
@@ -309,7 +450,9 @@ function fdAdvanceDestination(level, robot) {
     if (!fdAllowedSector(nx, nz)) continue
     var neighborControl = fdControl(nx, nz)
     if (neighborControl >= currentControl && neighborControl >= 70) continue
+    var terrain = fdSectorTerrain(level, nx, nz)
     var score = (currentControl - neighborControl) * 10 + fdNearestOriginDistance(nx, nz) / 256
+    score -= (1.0 - terrain.factor) * fdOptionNumber('terrainPathPenalty', 500)
     if (score > bestScore) {
       bestScore = score
       best = fdSectorCenter(nx, nz)
@@ -508,6 +651,9 @@ function fdShowPlayerStatus(server, player) {
   var sx = fdSX(player.x)
   var sz = fdSZ(player.z)
   var control = fdControl(sx, sz)
+  var terrain = fdSectorTerrain(fdWorld(server), sx, sz)
+  var supplied = control > 0 ? fdIsSupplied(sx, sz) : false
+  var garrison = fdOps.garrisons[fdKey(sx, sz)]
   var label = 'мирная территория'
   var color = 'green'
 
@@ -530,7 +676,9 @@ function fdShowPlayerStatus(server, player) {
 
   var name = String(player.username)
   var message = JSON.stringify({
-    text: '[Фронт] ' + label + ' | сектор ' + sx + ',' + sz + ' | контроль ' + control + '%',
+    text: '[Фронт] ' + label + ' | сектор ' + sx + ',' + sz + ' | контроль ' + control +
+      '% | ' + terrain.name + (control > 0 ? (supplied ? ' | снабжение есть' : ' | ОКРУЖЁН') : '') +
+      (garrison ? ' | ТрО ' + garrison.strength + '/' + garrison.maxStrength : ''),
     color: color
   })
   fdCmd(server, 'tellraw ' + name + ' ' + message)
@@ -545,12 +693,201 @@ function fdStatusCommand(context) {
   return 1
 }
 
+function fdTellPlayer(server, player, text, color) {
+  var message = JSON.stringify({text: '[Фронт] ' + text, color: color || 'gold'})
+  fdCmd(server, 'tellraw ' + String(player.username) + ' ' + message)
+}
+
+function fdCostFor(kind, level) {
+  var table = fdConfig.economy && fdConfig.economy[kind] ? fdConfig.economy[kind] : null
+  if (table && table[String(level)]) return table[String(level)]
+  if (kind === 'garrison') {
+    if (level === 1) return {'minecraft:emerald': 8, 'minecraft:iron_ingot': 16}
+    if (level === 2) return {'minecraft:emerald': 12, 'minecraft:iron_ingot': 24}
+    return {'minecraft:emerald': 16, 'minecraft:iron_ingot': 32}
+  }
+  return {'minecraft:emerald': 16, 'minecraft:iron_ingot': 24}
+}
+
+function fdPay(server, player, cost) {
+  var name = String(player.username)
+  var items = Object.keys(cost)
+  for (var i = 0; i < items.length; i++) {
+    if (fdCmd(server, 'clear ' + name + ' ' + items[i] + ' 0') < Number(cost[items[i]])) return false
+  }
+  for (var j = 0; j < items.length; j++) {
+    fdCmd(server, 'clear ' + name + ' ' + items[j] + ' ' + Number(cost[items[j]]))
+  }
+  return true
+}
+
+function fdSpawnFriendlySquad(server, player, type, count, tag) {
+  var offsets = [[2,0],[-2,0],[0,2],[0,-2],[3,3],[-3,-3]]
+  for (var i = 0; i < count; i++) {
+    var off = offsets[i % offsets.length]
+    fdCmd(server, `execute at ${String(player.username)} run summon ${type} ~${off[0]} ~ ~${off[1]} {Tags:["${tag}"],PersistenceRequired:1b}`)
+  }
+}
+
+function fdGarrisonCommand(context, mode) {
+  var source = context.source
+  var player = source.player
+  if (player == null) return 0
+  var server = source.server
+  if (!fdInitialized && !fdInitialize(server)) return 0
+  var sx = fdSX(player.x)
+  var sz = fdSZ(player.z)
+  var key = fdKey(sx, sz)
+  var existing = fdOps.garrisons[key]
+
+  if (mode === 'status') {
+    if (!existing) fdTellPlayer(server, player, 'В секторе нет ТрО.', 'gray')
+    else fdTellPlayer(server, player, 'ТрО сектора ' + key + ': уровень ' + existing.level + ', бойцов ' + existing.strength + '/' + existing.maxStrength + '.', 'blue')
+    return 1
+  }
+  if (!fdInWarArea(player.x, player.z) || fdInSafeZone(player.x, player.z) || fdControl(sx, sz) > 0) {
+    fdTellPlayer(server, player, 'ТрО можно разместить только в свободном секторе театра войны.', 'red')
+    return 0
+  }
+  var newLevel = existing ? Number(existing.level) + 1 : 1
+  if (mode === 'deploy' && existing) {
+    fdTellPlayer(server, player, 'ТрО уже размещена. Используй /front garrison upgrade.', 'yellow')
+    return 0
+  }
+  if (mode === 'upgrade' && !existing) {
+    fdTellPlayer(server, player, 'Сначала используй /front garrison.', 'yellow')
+    return 0
+  }
+  if (newLevel > 3) {
+    fdTellPlayer(server, player, 'ТрО уже максимального уровня.', 'yellow')
+    return 0
+  }
+  if (!fdPay(server, player, fdCostFor('garrison', newLevel))) {
+    fdTellPlayer(server, player, 'Недостаточно ресурсов для уровня ' + newLevel + '.', 'red')
+    return 0
+  }
+  var targetSize = newLevel === 1 ? 3 : (newLevel === 2 ? 4 : 5)
+  var oldSize = existing ? Number(existing.strength) : 0
+  var add = Math.max(0, targetSize - oldSize)
+  var sectorTag = 'fd_garrison_' + sx + '_' + sz
+  fdSpawnFriendlySquad(server, player, fdConfig.garrisonEntity || 'simpleenemymod:usunit', add, sectorTag)
+  fdOps.garrisons[key] = {level: newLevel, strength: targetSize, maxStrength: targetSize}
+  fdOpsDirty = true
+  fdOpsSave(server)
+  fdTellPlayer(server, player, 'Американская ТрО развёрнута: уровень ' + newLevel + ', бойцов ' + targetSize + '.', 'blue')
+  return 1
+}
+
+function fdCommandoCommand(context) {
+  var source = context.source
+  var player = source.player
+  if (player == null) return 0
+  var server = source.server
+  var ownerTag = 'fd_commando_' + String(player.username)
+  if (fdCount(server, `@e[tag=${ownerTag}]`) > 0) {
+    fdTellPlayer(server, player, 'Твой отряд коммандос уже находится в мире.', 'yellow')
+    return 0
+  }
+  if (!fdPay(server, player, fdCostFor('commando', 1))) {
+    fdTellPlayer(server, player, 'Недостаточно ресурсов для отряда коммандос.', 'red')
+    return 0
+  }
+  var size = fdOptionNumber('commandoSize', 4)
+  fdSpawnFriendlySquad(server, player, fdConfig.commandoEntity || 'simpleenemymod:pmcunit', size, ownerTag)
+  fdTellPlayer(server, player, 'Отряд коммандос из ' + size + ' бойцов прибыл.', 'green')
+  return 1
+}
+
+function fdPurgeCommand(context) {
+  var source = context.source
+  var removed = fdCmd(source.server, 'kill @e[tag=fd_robot]')
+  fdTrackedRobots = []
+  if (source.player != null) fdTellPlayer(source.server, source.player, 'Удалено фронтовых роботов: ' + removed + '. Контроль территорий сохранён.', 'green')
+  return 1
+}
+
+function fdHasWarServiceTag(entity) {
+  try {
+    var iterator = entity.getTags().iterator()
+    while (iterator.hasNext()) {
+      var tag = String(iterator.next())
+      if (tag === 'fd_robot' || tag.indexOf('fd_garrison_') === 0 || tag.indexOf('fd_commando_') === 0) return true
+    }
+  } catch (ignored) {}
+  return false
+}
+
+function fdResetWar(context) {
+  var source = context.source
+  var server = source.server
+  if (!fdInitialized && !fdInitialize(server)) return 0
+  var level = fdWorld(server)
+  var removed = 0
+  var iterator = level.getAllEntities().iterator()
+  while (iterator.hasNext()) {
+    var entity = iterator.next()
+    if (!fdIsRobot(entity) && !fdHasWarServiceTag(entity)) continue
+    try {
+      entity.discard()
+      removed++
+    } catch (error) {
+      try {
+        entity.remove('discarded')
+        removed++
+      } catch (ignored) {}
+    }
+  }
+
+  fdState = {}
+  fdDirty = true
+  for (var i = 0; i < fdConfig.origins.length; i++) {
+    fdSetControl(fdSX(fdConfig.origins[i].x), fdSZ(fdConfig.origins[i].z), 100)
+  }
+  fdOps = { liberated: {}, protection: {}, garrisons: {}, alerts: {} }
+  fdOpsDirty = true
+  fdTrackedRobots = []
+  fdTrackedSem = []
+  fdCombatCursor = 0
+  fdEntityScanTick = fdCombatTick
+  fdSharedIntel = null
+  fdTerrainCache = {}
+  fdCityCache = {}
+  fdExpansionClock = Number(fdConfig.expansionIntervalMinutes) * 60 * 20
+  fdRebuildSupply()
+  fdSave(server)
+  fdOpsSave(server)
+
+  fdTell(server, 'Война полностью сброшена. Убрано сущностей: ' + removed + '. Экспансия снова начинается от исходного очага.', 'yellow')
+  return 1
+}
+
+function fdResetWarning(context) {
+  if (context.source.player != null) {
+    fdTellPlayer(context.source.server, context.source.player,
+      'Полный сброс удалит роботов, ТрО и коммандос, а также очистит контроль секторов. Для подтверждения: /front reset confirm', 'red')
+  }
+  return 1
+}
+
 ServerEvents.commandRegistry(event => {
   var Commands = event.commands
   event.register(
     Commands.literal('front')
       .executes(context => fdStatusCommand(context))
       .then(Commands.literal('status').executes(context => fdStatusCommand(context)))
+      .then(Commands.literal('garrison')
+        .executes(context => fdGarrisonCommand(context, 'deploy'))
+        .then(Commands.literal('upgrade').executes(context => fdGarrisonCommand(context, 'upgrade')))
+        .then(Commands.literal('status').executes(context => fdGarrisonCommand(context, 'status'))))
+      .then(Commands.literal('squad')
+        .then(Commands.literal('commando').executes(context => fdCommandoCommand(context))))
+      .then(Commands.literal('purge')
+        .requires(source => source.hasPermission(2))
+        .executes(context => fdPurgeCommand(context)))
+      .then(Commands.literal('reset')
+        .requires(source => source.hasPermission(2))
+        .executes(context => fdResetWarning(context))
+        .then(Commands.literal('confirm').executes(context => fdResetWar(context))))
   )
 })
 
@@ -625,6 +962,8 @@ function fdInitialize(server) {
     if (!fdConfig.enabled) return false
     fdCmd(server, 'scoreboard objectives add fd_tmp dummy')
     fdLoadState(server)
+    fdOpsLoad(server)
+    fdRebuildSupply()
     fdExpansionClock = Number(fdConfig.expansionIntervalMinutes) * 60 * 20
     fdInitialized = true
     fdTell(server, `Секторный фронт загружен. Размер сектора: ${fdConfig.sectorSize} блоков.`, 'yellow')
@@ -667,9 +1006,19 @@ EntityEvents.death(event => {
   var sz = fdSZ(entity.z)
   if (!fdAllowedSector(sx, sz)) return
 
+  var player = event.source && event.source.player ? event.source.player : null
   var loss = Number(fdConfig.controlLossPerRobotKill)
-  if (event.source && event.source.player) loss *= Number(fdConfig.playerKillMultiplier)
-  fdSetControl(sx, sz, fdControl(sx, sz) - loss)
+  if (player != null) loss *= Number(fdConfig.playerKillMultiplier)
+  var oldControl = fdControl(sx, sz)
+  fdSetControl(sx, sz, oldControl - loss)
+
+  // Player liberation is intentionally asymmetric: Warium capturing a sector
+  // never deletes players, allied soldiers or civilians.
+  if (player != null && oldControl > 0 && fdControl(sx, sz) === 0) {
+    fdLiberateSector(event.server, sx, sz, player)
+    fdSave(event.server)
+    fdOpsSave(event.server)
+  }
 })
 
 // Warium has its own spawning mechanisms which do not know about the front map.

@@ -14,6 +14,12 @@
   "sectorsAdvancedPerCycle": 3,
   "expansionSourceControl": 70,
   "expansionControlGain": 25,
+  "peakExpansionFactor": 0.35,
+  "riverExpansionFactor": 0.20,
+  "terrainPathPenalty": 500,
+  "supplyControlMinimum": 50,
+  "isolatedControlLossPerCycle": 8,
+  "liberationProtectionMinutes": 15,
   "unopposedGainPerCheck": 1,
   "fullSafetyDistance": 8192,
   "activeRadiusSectors": 0,
@@ -38,6 +44,20 @@
   "playerKillMultiplier": 1.5,
   "extraRobotsPerDefender": 0.75,
   "resistanceCap": 6,
+  "garrisonEntity": "simpleenemymod:usunit",
+  "garrisonDefensePerSoldier": 3,
+  "commandoEntity": "simpleenemymod:pmcunit",
+  "commandoSize": 4,
+  "economy": {
+    "garrison": {
+      "1": { "minecraft:emerald": 8, "minecraft:iron_ingot": 16 },
+      "2": { "minecraft:emerald": 12, "minecraft:iron_ingot": 24 },
+      "3": { "minecraft:emerald": 16, "minecraft:iron_ingot": 32 }
+    },
+    "commando": {
+      "1": { "minecraft:emerald": 16, "minecraft:iron_ingot": 24 }
+    }
+  },
   "alliedEntities": [
     "simpleenemymod:usunit",
     "simpleenemymod:pmcunit",
