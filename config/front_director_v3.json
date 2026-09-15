@@ -1,0 +1,68 @@
+{
+  "enabled": true,
+  "sectorSize": 256,
+  "origins": [
+    { "name": "Северный очаг", "x": -620, "z": -411 }
+  ],
+  "warAreas": [
+    { "name": "Основной театр войны", "x1": -5562, "z1": -3152, "x2": 2197, "z2": 379 }
+  ],
+  "safeZones": [
+    { "name": "Главная база", "x1": 5288, "z1": 3046, "x2": 548, "z2": 572 }
+  ],
+  "expansionIntervalMinutes": 2,
+  "sectorsAdvancedPerCycle": 3,
+  "expansionSourceControl": 70,
+  "expansionControlGain": 25,
+  "unopposedGainPerCheck": 1,
+  "fullSafetyDistance": 8192,
+  "activeRadiusSectors": 0,
+  "spawnControlMinimum": 20,
+  "baseRobotCapPerSector": 18,
+  "frontRobotCapPerSector": 18,
+  "rearGarrisonCapPerSector": 4,
+  "absoluteRobotCapPerSector": 24,
+  "spawnBatch": 3,
+  "frontSpawnBatch": 3,
+  "rearSpawnBatch": 1,
+  "surfaceAttempts": 8,
+  "minimumSurfaceY": 50,
+  "maximumSurfaceY": 250,
+  "mortarChancePerUnit": 0.02,
+  "rareSupportChancePerUnit": 0.02,
+  "supportChancePerUnit": 0.15,
+  "aircraftSpawnHeight": 28,
+  
+  "defenderRecoveryPerCheck": 0.35,
+  "controlLossPerRobotKill": 3,
+  "playerKillMultiplier": 1.5,
+  "extraRobotsPerDefender": 0.75,
+  "resistanceCap": 6,
+  "alliedEntities": [
+    "simpleenemymod:usunit",
+    "simpleenemymod:pmcunit",
+    "tacz_sewv:us_medic",
+    "tacz_sewv:us_engineer",
+    "tacz_sewv:us_combat_engineer"
+  ],
+  "rareSupportEntities": [
+    "crusty_chunks:hunter",
+    "crusty_chunks:reaper"
+  ],
+  "aircraftEntities": [
+    "crusty_chunks:hunter",
+    "crusty_chunks:reaper"
+  ],
+  "robotEntities": [
+    "crusty_chunks:striker",
+    "crusty_chunks:striker",
+    "crusty_chunks:rifler",
+    "crusty_chunks:rifler",
+    "crusty_chunks:worker",
+    "crusty_chunks:breacher",
+    "crusty_chunks:scout",
+    "crusty_chunks:assassin",
+    "crusty_chunks:commander",
+    "crusty_chunks:mortarer"
+  ]
+}

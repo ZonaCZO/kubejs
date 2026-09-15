@@ -1,0 +1,691 @@
+// Front Director v3 — KubeJS 2001.6.5 / Forge 1.20.1
+// Dynamic sector front. CaptureZone is not used.
+
+var FD_BlockPos = Java.loadClass('net.minecraft.core.BlockPos')
+var FD_Heightmap = Java.loadClass('net.minecraft.world.level.levelgen.Heightmap$Types')
+var FD_LostCities = Java.loadClass('mcjty.lostcities.LostCities')
+
+var FD_CONFIG = 'kubejs/config/front_director_v3.json'
+var FD_CHECK_TICKS = 400 // 20 seconds; low-CPU profile
+
+var fdConfig = null
+var fdState = {}
+var fdTick = 0
+var fdExpansionClock = 0
+var fdDirty = false
+var fdInitialized = false
+var fdCityCache = {}
+var fdCombatTick = 0
+var fdSharedIntel = null
+var fdTrackedRobots = []
+var fdTrackedSem = []
+var fdEntityScanTick = -999999
+var fdCombatCursor = 0
+
+var FD_AI_INTERVAL = 80 // 4 seconds; low-CPU combat network
+var FD_ENTITY_SCAN_INTERVAL = 400 // full world scan only every 20 seconds
+var FD_AI_BATCH = 8 // spread robot AI work across multiple checks
+var FD_INTEL_TTL = 20 * 30 // 30 seconds
+var FD_SEM_DETECTION_RANGE_SQ = 16 * 16
+var FD_INTEL_GRID = 32 // reported coordinates are deliberately approximate
+
+function fdCmd(server, command) {
+  try { return server.runCommandSilent(command) } catch (ignored) { return 0 }
+}
+
+function fdTell(server, text, color) {
+  var safe = String(text).replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+  fdCmd(server, `tellraw @a {"text":"[Фронт] ${safe}","color":"${color || 'gold'}"}`)
+}
+
+function fdLoadConfig() {
+  fdConfig = JsonIO.read(FD_CONFIG)
+  if (!fdConfig) throw new Error(`Не найден ${FD_CONFIG}`)
+}
+
+function fdWorld(server) {
+  return server.overworld()
+}
+
+function fdKey(sx, sz) { return sx + ',' + sz }
+function fdSX(x) { return Math.floor(x / Number(fdConfig.sectorSize)) }
+function fdSZ(z) { return Math.floor(z / Number(fdConfig.sectorSize)) }
+function fdOptionNumber(name, fallback) {
+  return fdConfig[name] == null ? fallback : Number(fdConfig[name])
+}
+
+function fdRandomFrom(list, fallback) {
+  if (list == null || list.length === 0) return fallback
+  return String(list[Math.floor(Math.random() * list.length)])
+}
+
+function fdInfantryType() {
+  return fdRandomFrom(fdConfig.infantryEntities, fdRandomFrom([
+    'crusty_chunks:striker',
+    'crusty_chunks:striker',
+    'crusty_chunks:rifler',
+    'crusty_chunks:rifler',
+    'crusty_chunks:worker',
+    'crusty_chunks:breacher',
+    'crusty_chunks:scout',
+    'crusty_chunks:assassin'
+  ], 'crusty_chunks:striker'))
+}
+
+function fdSupportType() {
+  return fdRandomFrom(fdConfig.supportEntities, fdRandomFrom([
+    'crusty_chunks:breacher',
+    'crusty_chunks:scout',
+    'crusty_chunks:assassin',
+    'crusty_chunks:commander'
+  ], 'crusty_chunks:breacher'))
+}
+
+function fdIsAircraftType(type) {
+  var aircraft = fdConfig.aircraftEntities || ['crusty_chunks:hunter']
+  for (var i = 0; i < aircraft.length; i++) {
+    if (String(aircraft[i]) === String(type)) return true
+  }
+  return false
+}
+
+function fdSectorCenter(sx, sz) {
+  var size = Number(fdConfig.sectorSize)
+  return { x: sx * size + Math.floor(size / 2), z: sz * size + Math.floor(size / 2) }
+}
+
+function fdInRect(x, z, rect) {
+  return x >= Math.min(rect.x1, rect.x2) && x <= Math.max(rect.x1, rect.x2) &&
+    z >= Math.min(rect.z1, rect.z2) && z <= Math.max(rect.z1, rect.z2)
+}
+
+function fdInWarArea(x, z) {
+  for (var i = 0; i < fdConfig.warAreas.length; i++) {
+    if (fdInRect(x, z, fdConfig.warAreas[i])) return true
+  }
+  return false
+}
+
+function fdInSafeZone(x, z) {
+  for (var i = 0; i < fdConfig.safeZones.length; i++) {
+    if (fdInRect(x, z, fdConfig.safeZones[i])) return true
+  }
+  return false
+}
+
+function fdAllowedSector(sx, sz) {
+  var c = fdSectorCenter(sx, sz)
+  return fdInWarArea(c.x, c.z) && !fdInSafeZone(c.x, c.z)
+}
+
+function fdControl(sx, sz) {
+  var v = fdState[fdKey(sx, sz)]
+  return v == null ? 0 : Number(v)
+}
+
+function fdSetControl(sx, sz, value) {
+  var key = fdKey(sx, sz)
+  var old = fdControl(sx, sz)
+  var next = Math.max(0, Math.min(100, Math.round(value)))
+  if (old === next) return
+  if (next === 0) delete fdState[key]
+  else fdState[key] = next
+  fdDirty = true
+}
+
+function fdSave(server) {
+  if (!fdDirty) return
+  server.persistentData.putString('front_director_v3_state', JSON.stringify(fdState))
+  fdDirty = false
+}
+
+function fdLoadState(server) {
+  try {
+    fdState = server.persistentData.contains('front_director_v3_state')
+      ? JSON.parse(String(server.persistentData.getString('front_director_v3_state')))
+      : {}
+  } catch (error) {
+    console.error('[Front Director v3] state reset: ' + error)
+    fdState = {}
+  }
+
+  for (var i = 0; i < fdConfig.origins.length; i++) {
+    fdSetControl(
+      fdSX(fdConfig.origins[i].x),
+      fdSZ(fdConfig.origins[i].z),
+      100
+    )
+  }
+  fdSave(server)
+}
+
+function fdNearestOriginDistance(sx, sz) {
+  var c = fdSectorCenter(sx, sz)
+  var best = 999999999
+  for (var i = 0; i < fdConfig.origins.length; i++) {
+    var dx = c.x - Number(fdConfig.origins[i].x)
+    var dz = c.z - Number(fdConfig.origins[i].z)
+    best = Math.min(best, Math.sqrt(dx * dx + dz * dz))
+  }
+  return best
+}
+
+function fdStrength(sx, sz) {
+  var distance = fdNearestOriginDistance(sx, sz)
+  var falloff = Math.max(0.20, 1.0 - distance / Number(fdConfig.fullSafetyDistance))
+  return falloff
+}
+
+function fdNeighborHasControl(sx, sz, minimum) {
+  return fdControl(sx + 1, sz) >= minimum || fdControl(sx - 1, sz) >= minimum ||
+    fdControl(sx, sz + 1) >= minimum || fdControl(sx, sz - 1) >= minimum
+}
+
+function fdIsFrontier(sx, sz) {
+  var control = fdControl(sx, sz)
+  if (control > 0 && control < 100) return true
+  if (control === 0) return fdNeighborHasControl(sx, sz, Number(fdConfig.expansionSourceControl))
+  return fdControl(sx + 1, sz) < 50 || fdControl(sx - 1, sz) < 50 ||
+    fdControl(sx, sz + 1) < 50 || fdControl(sx, sz - 1) < 50
+}
+
+function fdStrategicExpansion(server) {
+  var candidates = []
+  var seen = {}
+  var dirs = [[1,0],[-1,0],[0,1],[0,-1]]
+
+  Object.keys(fdState).forEach(key => {
+    var pair = key.split(',')
+    var sx = Number(pair[0])
+    var sz = Number(pair[1])
+    if (fdControl(sx, sz) < Number(fdConfig.expansionSourceControl)) return
+
+    for (var d = 0; d < dirs.length; d++) {
+      var nx = sx + dirs[d][0]
+      var nz = sz + dirs[d][1]
+      var nk = fdKey(nx, nz)
+      if (seen[nk] || !fdAllowedSector(nx, nz) || fdControl(nx, nz) >= 100) continue
+      seen[nk] = true
+      candidates.push({ sx: nx, sz: nz })
+    }
+  })
+
+  if (candidates.length === 0) return
+  candidates.sort((a, b) => fdNearestOriginDistance(a.sx, a.sz) - fdNearestOriginDistance(b.sx, b.sz))
+  var limit = Math.min(Number(fdConfig.sectorsAdvancedPerCycle), candidates.length)
+
+  for (var i = 0; i < limit; i++) {
+    var strategicGain = Math.max(1, Math.round(Number(fdConfig.expansionControlGain) *
+      fdStrength(candidates[i].sx, candidates[i].sz)))
+    fdSetControl(candidates[i].sx, candidates[i].sz,
+      fdControl(candidates[i].sx, candidates[i].sz) + strategicGain)
+  }
+  fdSave(server)
+}
+
+function fdCount(server, selector) {
+  fdCmd(server, 'scoreboard players set #fdscan fd_tmp 0')
+  fdCmd(server, `execute as ${selector} run scoreboard players add #fdscan fd_tmp 1`)
+  return fdCmd(server, 'scoreboard players get #fdscan fd_tmp')
+}
+
+function fdSectorBox(sx, sz) {
+  var size = Number(fdConfig.sectorSize)
+  return `x=${sx * size},y=-64,z=${sz * size},dx=${size - 1},dy=384,dz=${size - 1}`
+}
+
+function fdRobotSelector(sx, sz) {
+  return `@e[tag=fd_robot,${fdSectorBox(sx, sz)}]`
+}
+
+function fdDefenderCount(server, sx, sz) {
+  var box = fdSectorBox(sx, sz)
+  var total = fdCount(server, `@a[${box}]`)
+  for (var i = 0; i < fdConfig.alliedEntities.length; i++) {
+    total += fdCount(server, `@e[type=${fdConfig.alliedEntities[i]},${box}]`)
+  }
+  return total
+}
+
+function fdIsRobot(entity) {
+  var id = String(entity.type)
+  for (var i = 0; i < fdConfig.robotEntities.length; i++) {
+    if (id === String(fdConfig.robotEntities[i])) return true
+  }
+  return entity.tags && entity.tags.contains && entity.tags.contains('fd_robot')
+}
+
+function fdEntityId(entity) {
+  try { return String(entity.type.arch$registryName()) } catch (ignored) {}
+  try { return String(entity.type) } catch (ignored) {}
+  return ''
+}
+
+function fdIsDefenderEntity(entity) {
+  try { if (entity.isPlayer()) return true } catch (ignored) {}
+  var id = fdEntityId(entity)
+  for (var i = 0; i < fdConfig.alliedEntities.length; i++) {
+    if (id === String(fdConfig.alliedEntities[i])) return true
+  }
+  // All three Simple Enemy Mod armies are valid Warium targets.
+  return id.indexOf('simpleenemymod:') === 0
+}
+
+function fdDistanceSq(a, b) {
+  var dx = a.x - b.x
+  var dy = a.y - b.y
+  var dz = a.z - b.z
+  return dx * dx + dy * dy + dz * dz
+}
+
+function fdHasLineOfSight(observer, target) {
+  try { return observer.getSensing().hasLineOfSight(target) } catch (ignored) {}
+  try { return observer.hasLineOfSight(target) } catch (ignored) {}
+  return false
+}
+
+function fdRememberTarget(target) {
+  fdSharedIntel = {
+    x: Math.round(target.x / FD_INTEL_GRID) * FD_INTEL_GRID,
+    y: Math.round(target.y),
+    z: Math.round(target.z / FD_INTEL_GRID) * FD_INTEL_GRID,
+    expires: fdCombatTick + FD_INTEL_TTL,
+    target: target
+  }
+}
+
+function fdAdvanceDestination(level, robot) {
+  var sx = fdSX(robot.x)
+  var sz = fdSZ(robot.z)
+  var currentControl = fdControl(sx, sz)
+  if (currentControl <= 0) return null
+
+  var dirs = [[1,0],[-1,0],[0,1],[0,-1]]
+  var best = null
+  var bestScore = -999999
+  for (var i = 0; i < dirs.length; i++) {
+    var nx = sx + dirs[i][0]
+    var nz = sz + dirs[i][1]
+    if (!fdAllowedSector(nx, nz)) continue
+    var neighborControl = fdControl(nx, nz)
+    if (neighborControl >= currentControl && neighborControl >= 70) continue
+    var score = (currentControl - neighborControl) * 10 + fdNearestOriginDistance(nx, nz) / 256
+    if (score > bestScore) {
+      bestScore = score
+      best = fdSectorCenter(nx, nz)
+    }
+  }
+  if (best == null) return null
+  if (!level.getChunkSource().hasChunk(best.x >> 4, best.z >> 4)) return null
+  best.y = level.getHeight(FD_Heightmap.MOTION_BLOCKING_NO_LEAVES, best.x, best.z)
+  return best
+}
+
+function fdCombatNetwork(server) {
+  var level = fdWorld(server)
+  if (fdCombatTick - fdEntityScanTick >= FD_ENTITY_SCAN_INTERVAL) {
+    fdTrackedRobots = []
+    fdTrackedSem = []
+    var iterator = level.getAllEntities().iterator()
+    while (iterator.hasNext()) {
+      var scannedEntity = iterator.next()
+      if (!scannedEntity.isAlive()) continue
+      if (fdIsRobot(scannedEntity) && scannedEntity.getTags().contains('fd_robot')) fdTrackedRobots.push(scannedEntity)
+      else if (fdEntityId(scannedEntity).indexOf('simpleenemymod:') === 0) fdTrackedSem.push(scannedEntity)
+    }
+    fdEntityScanTick = fdCombatTick
+    if (fdCombatCursor >= fdTrackedRobots.length) fdCombatCursor = 0
+  }
+
+  var robots = fdTrackedRobots
+  var semSoldiers = fdTrackedSem
+  if (robots.length === 0) return
+  var batch = Math.min(FD_AI_BATCH, robots.length)
+
+  // Player detection belongs entirely to Stealth. We only relay a target that
+  // Warium's own AI has already acquired. This preserves light, crouching,
+  // movement, grass, FOV, vibration and TaCZ-Stealth bridge behavior.
+  for (var r = 0; r < batch; r++) {
+    var robot = robots[(fdCombatCursor + r) % robots.length]
+    if (!robot || !robot.isAlive()) continue
+    var acquiredTarget = null
+    try { acquiredTarget = robot.getTarget() } catch (ignored) {}
+    if (acquiredTarget != null && acquiredTarget.isAlive() && fdIsDefenderEntity(acquiredTarget)) {
+      fdRememberTarget(acquiredTarget)
+      continue
+    }
+
+    // SEM units are not players, so Stealth does not expose a player-visibility
+    // value for them. Require close range and a real line of sight.
+    var nearestSem = null
+    var nearestSemDistance = FD_SEM_DETECTION_RANGE_SQ
+    for (var d = 0; d < semSoldiers.length; d++) {
+      var semDistance = fdDistanceSq(robot, semSoldiers[d])
+      if (semDistance < nearestSemDistance && fdHasLineOfSight(robot, semSoldiers[d])) {
+        nearestSemDistance = semDistance
+        nearestSem = semSoldiers[d]
+      }
+    }
+    if (nearestSem != null) {
+      try { robot.setTarget(nearestSem) } catch (ignored) {}
+      fdRememberTarget(nearestSem)
+    }
+  }
+
+  if (fdSharedIntel != null && fdSharedIntel.expires < fdCombatTick) fdSharedIntel = null
+
+  // Unengaged robots respond to shared intel, otherwise they advance one sector.
+  for (var a = 0; a < batch; a++) {
+    var movingRobot = robots[(fdCombatCursor + a) % robots.length]
+    if (!movingRobot || !movingRobot.isAlive()) continue
+    var currentTarget = null
+    try { currentTarget = movingRobot.getTarget() } catch (ignored) {}
+    if (currentTarget != null && currentTarget.isAlive()) continue
+
+    if (fdSharedIntel != null) {
+      try {
+        // Radio only supplies an approximate search area. Each robot must then
+        // acquire the player through its own AI, where Stealth remains active.
+        movingRobot.getNavigation().moveTo(fdSharedIntel.x, fdSharedIntel.y, fdSharedIntel.z, 1.15)
+      } catch (ignored) {}
+      continue
+    }
+
+    var destination = fdAdvanceDestination(level, movingRobot)
+    if (destination != null) {
+      try { movingRobot.getNavigation().moveTo(destination.x, destination.y, destination.z, 1.0) } catch (ignored) {}
+    }
+  }
+  fdCombatCursor = (fdCombatCursor + batch) % robots.length
+}
+
+function fdLoadedSurface(level, x, z) {
+  var probe = new FD_BlockPos(x, 64, z)
+  if (!level.getChunkSource().hasChunk(x >> 4, z >> 4)) return null
+
+  var y = level.getHeight(FD_Heightmap.MOTION_BLOCKING_NO_LEAVES, x, z)
+  if (y <= Number(fdConfig.minimumSurfaceY) || y >= Number(fdConfig.maximumSurfaceY)) return null
+
+  var floorPos = new FD_BlockPos(x, y - 1, z)
+  var feetPos = new FD_BlockPos(x, y, z)
+  var headPos = new FD_BlockPos(x, y + 1, z)
+
+  // No invasion spawns inside caves, dungeons, bunkers or covered rooms.
+  if (!level.canSeeSky(feetPos)) return null
+
+  var floor = level.getBlockState(floorPos)
+  var feet = level.getBlockState(feetPos)
+  var head = level.getBlockState(headPos)
+
+  if (!floor.getFluidState().isEmpty()) return null
+  if (!feet.isAir() || !head.isAir()) return null
+  var floorId = String(floor.block.id)
+  if (floorId.indexOf('leaves') >= 0 || floorId.indexOf('ice') >= 0) return null
+  return y
+}
+
+function fdIsCitySector(level, sx, sz) {
+  var key = fdKey(sx, sz)
+  if (fdCityCache[key] != null) return fdCityCache[key]
+
+  try {
+    var citySectorSize = Number(fdConfig.sectorSize)
+    var startX = sx * citySectorSize
+    var startZ = sz * citySectorSize
+    var samples = [
+      [startX + citySectorSize / 2, startZ + citySectorSize / 2],
+      [startX + citySectorSize / 4, startZ + citySectorSize / 4],
+      [startX + citySectorSize * 3 / 4, startZ + citySectorSize / 4],
+      [startX + citySectorSize / 4, startZ + citySectorSize * 3 / 4],
+      [startX + citySectorSize * 3 / 4, startZ + citySectorSize * 3 / 4]
+    ]
+    var info = FD_LostCities.lostCitiesImp.getLostInfo(level)
+    var cityHits = 0
+    for (var i = 0; i < samples.length; i++) {
+      var cx = Math.floor(samples[i][0]) >> 4
+      var cz = Math.floor(samples[i][1]) >> 4
+      if (!level.getChunkSource().hasChunk(cx, cz)) continue
+      if (info.getChunkInfo(cx, cz).isCity()) cityHits++
+    }
+    fdCityCache[key] = cityHits >= fdOptionNumber('citySamplesRequired', 2)
+  } catch (error) {
+    console.warn('[Front Director v3.3] Lost Cities check failed for ' + key + ': ' + error)
+    fdCityCache[key] = false
+  }
+  return fdCityCache[key]
+}
+
+function fdSpawnRobot(server, level, sx, sz, anchor, forcedType) {
+  var size = Number(fdConfig.sectorSize)
+  var margin = 20
+  for (var attempt = 0; attempt < Number(fdConfig.surfaceAttempts); attempt++) {
+    var x
+    var z
+    if (anchor) {
+      var radius = fdOptionNumber('squadRadius', 10)
+      x = anchor.x + Math.floor(Math.random() * (radius * 2 + 1)) - radius
+      z = anchor.z + Math.floor(Math.random() * (radius * 2 + 1)) - radius
+      x = Math.max(sx * size + margin, Math.min((sx + 1) * size - margin - 1, x))
+      z = Math.max(sz * size + margin, Math.min((sz + 1) * size - margin - 1, z))
+    } else {
+      x = sx * size + margin + Math.floor(Math.random() * (size - margin * 2))
+      z = sz * size + margin + Math.floor(Math.random() * (size - margin * 2))
+    }
+    if (fdInSafeZone(x, z)) continue
+    var y = fdLoadedSurface(level, x, z)
+    if (y == null) continue
+
+    var types = fdConfig.robotEntities
+    var type = forcedType || String(types[Math.floor(Math.random() * types.length)])
+    var spawnY = fdIsAircraftType(type) ? y + fdOptionNumber('aircraftSpawnHeight', 28) : y
+    fdCmd(server, `execute in minecraft:overworld run summon ${type} ${x} ${spawnY} ${z} {Tags:["fd_robot","fd_front_unit"],PersistenceRequired:1b}`)
+    return { x: x, z: z }
+  }
+  return null
+}
+
+function fdActiveSectors(server, level) {
+  var active = {}
+  var radius = Number(fdConfig.activeRadiusSectors)
+  var players = level.players
+
+  for (var p = 0; p < players.size(); p++) {
+    var player = players.get(p)
+    var psx = fdSX(player.x)
+    var psz = fdSZ(player.z)
+    for (var dx = -radius; dx <= radius; dx++) {
+      for (var dz = -radius; dz <= radius; dz++) {
+        var sx = psx + dx
+        var sz = psz + dz
+        if (fdAllowedSector(sx, sz)) active[fdKey(sx, sz)] = { sx: sx, sz: sz }
+      }
+    }
+  }
+  return active
+}
+
+function fdShowPlayerStatus(server, player) {
+  var sx = fdSX(player.x)
+  var sz = fdSZ(player.z)
+  var control = fdControl(sx, sz)
+  var label = 'мирная территория'
+  var color = 'green'
+
+  if (fdInSafeZone(player.x, player.z)) {
+    label = 'безопасная зона'
+    color = 'aqua'
+  } else if (!fdInWarArea(player.x, player.z)) {
+    label = 'вне театра войны'
+    color = 'gray'
+  } else if (fdIsFrontier(sx, sz)) {
+    label = 'ЛИНИЯ ФРОНТА'
+    color = 'gold'
+  } else if (control >= 100) {
+    label = 'тыл Warium'
+    color = 'red'
+  } else if (control > 0) {
+    label = 'спорная территория'
+    color = 'yellow'
+  }
+
+  var name = String(player.username)
+  var message = JSON.stringify({
+    text: '[Фронт] ' + label + ' | сектор ' + sx + ',' + sz + ' | контроль ' + control + '%',
+    color: color
+  })
+  fdCmd(server, 'tellraw ' + name + ' ' + message)
+}
+
+function fdStatusCommand(context) {
+  var source = context.source
+  var player = source.player
+  if (player == null) return 0
+  if (!fdInitialized && !fdInitialize(source.server)) return 0
+  fdShowPlayerStatus(source.server, player)
+  return 1
+}
+
+ServerEvents.commandRegistry(event => {
+  var Commands = event.commands
+  event.register(
+    Commands.literal('front')
+      .executes(context => fdStatusCommand(context))
+      .then(Commands.literal('status').executes(context => fdStatusCommand(context)))
+  )
+})
+
+function fdUpdateLocalFront(server) {
+  var level = fdWorld(server)
+  var active = fdActiveSectors(server, level)
+
+  Object.keys(active).forEach(key => {
+    var activeSector = active[key]
+    var control = fdControl(activeSector.sx, activeSector.sz)
+    var frontSector = fdIsFrontier(activeSector.sx, activeSector.sz)
+    if (!frontSector && control < Number(fdConfig.spawnControlMinimum)) return
+
+    var robots = fdCount(server, fdRobotSelector(activeSector.sx, activeSector.sz))
+    var defenders = fdDefenderCount(server, activeSector.sx, activeSector.sz)
+
+    if (defenders > 0 && robots === 0 && control > 0) {
+      var recovery = Number(fdConfig.defenderRecoveryPerCheck) * Math.min(defenders, Number(fdConfig.resistanceCap))
+      fdSetControl(activeSector.sx, activeSector.sz, control - recovery)
+    } else if (defenders === 0 && control > 0 && fdNeighborHasControl(activeSector.sx, activeSector.sz, Number(fdConfig.expansionSourceControl))) {
+      fdSetControl(activeSector.sx, activeSector.sz, control + Number(fdConfig.unopposedGainPerCheck))
+    }
+
+    var updated = fdControl(activeSector.sx, activeSector.sz)
+    if (updated < Number(fdConfig.spawnControlMinimum)) return
+
+    var strength = fdStrength(activeSector.sx, activeSector.sz)
+    var citySector = fdIsCitySector(level, activeSector.sx, activeSector.sz)
+    var cityMultiplier = citySector ? fdOptionNumber('cityRobotMultiplier', 1.8) : 1.0
+    var resistanceBonus = Math.min(Number(fdConfig.resistanceCap), defenders) * Number(fdConfig.extraRobotsPerDefender)
+    var frontBaseCap = fdOptionNumber('frontRobotCapPerSector', fdConfig.baseRobotCapPerSector)
+    var rearBaseCap = fdOptionNumber('rearGarrisonCapPerSector', 8)
+    var selectedBaseCap = frontSector ? frontBaseCap : rearBaseCap
+    var cap = Math.min(Number(fdConfig.absoluteRobotCapPerSector),
+      Math.round(selectedBaseCap * strength * cityMultiplier + (frontSector ? resistanceBonus : 0)))
+
+    if (robots >= cap) return
+    var selectedBatch = frontSector ? fdOptionNumber('frontSpawnBatch', fdConfig.spawnBatch) : fdOptionNumber('rearSpawnBatch', 2)
+    var wave = Math.min(selectedBatch, cap - robots)
+    var squadAnchor = null
+    var rarePresent = fdCount(server, `@e[tag=fd_rare_support,${fdSectorBox(activeSector.sx, activeSector.sz)}]`) > 0
+    for (var i = 0; i < wave; i++) {
+      var forcedType = fdInfantryType()
+      var rareSupport = false
+      if (i === 0 && wave >= fdOptionNumber('squadLeaderMinimumSize', 5) &&
+          Math.random() < fdOptionNumber('squadLeaderChance', 0.35)) {
+        var leaders = fdConfig.squadLeaderEntities || ['crusty_chunks:commander', 'crusty_chunks:scout']
+        forcedType = String(leaders[Math.floor(Math.random() * leaders.length)])
+      } else if (!rarePresent && Math.random() < fdOptionNumber('rareSupportChancePerUnit', 0.02)) {
+        forcedType = fdRandomFrom(fdConfig.rareSupportEntities, 'crusty_chunks:hunter')
+        rareSupport = true
+        rarePresent = true
+      } else if (Math.random() < fdOptionNumber('mortarChancePerUnit', 0.025)) {
+        forcedType = 'crusty_chunks:mortarer'
+      } else if (Math.random() < fdOptionNumber('supportChancePerUnit', 0.18)) {
+        forcedType = fdSupportType()
+      }
+      var spawnedAt = fdSpawnRobot(server, level, activeSector.sx, activeSector.sz, squadAnchor, forcedType)
+      if (rareSupport && spawnedAt) {
+        fdCmd(server, `tag @e[type=${forcedType},tag=fd_robot,sort=nearest,limit=1,x=${spawnedAt.x},z=${spawnedAt.z},distance=..24] add fd_rare_support`)
+      }
+      if (!squadAnchor && spawnedAt) squadAnchor = spawnedAt
+    }
+  })
+  fdSave(server)
+}
+
+function fdInitialize(server) {
+  if (fdInitialized) return true
+  try {
+    fdLoadConfig()
+    if (!fdConfig.enabled) return false
+    fdCmd(server, 'scoreboard objectives add fd_tmp dummy')
+    fdLoadState(server)
+    fdExpansionClock = Number(fdConfig.expansionIntervalMinutes) * 60 * 20
+    fdInitialized = true
+    fdTell(server, `Секторный фронт загружен. Размер сектора: ${fdConfig.sectorSize} блоков.`, 'yellow')
+    console.info('[Front Director v3.2] initialized successfully')
+    return true
+  } catch (error) {
+    console.error('[Front Director v3.2] initialization failed: ' + error)
+    fdConfig = null
+    fdInitialized = false
+    return false
+  }
+}
+
+ServerEvents.loaded(event => {
+  fdInitialize(event.server)
+})
+
+ServerEvents.tick(event => {
+  // Also initializes after /reload, because ServerEvents.loaded is not fired by /reload.
+  if (!fdInitialized && !fdInitialize(event.server)) return
+  if (!fdConfig || !fdConfig.enabled) return
+  fdTick++
+  fdCombatTick++
+  if (fdCombatTick % FD_AI_INTERVAL === 0) fdCombatNetwork(event.server)
+  if (fdTick % FD_CHECK_TICKS !== 0) return
+
+  var server = event.server
+  fdExpansionClock -= FD_CHECK_TICKS
+  if (fdExpansionClock <= 0) {
+    fdStrategicExpansion(server)
+    fdExpansionClock = Number(fdConfig.expansionIntervalMinutes) * 60 * 20
+  }
+  fdUpdateLocalFront(server)
+})
+
+EntityEvents.death(event => {
+  if (!fdConfig || !fdConfig.enabled || !fdIsRobot(event.entity)) return
+  var entity = event.entity
+  var sx = fdSX(entity.x)
+  var sz = fdSZ(entity.z)
+  if (!fdAllowedSector(sx, sz)) return
+
+  var loss = Number(fdConfig.controlLossPerRobotKill)
+  if (event.source && event.source.player) loss *= Number(fdConfig.playerKillMultiplier)
+  fdSetControl(sx, sz, fdControl(sx, sz) - loss)
+})
+
+// Warium has its own spawning mechanisms which do not know about the front map.
+// Only units marked by fdSpawnRobot are allowed to join through this director.
+EntityEvents.spawned(event => {
+  if (!fdConfig || !fdConfig.enabled) return
+  var entity = event.entity
+  var id = fdEntityId(entity)
+  if (id.indexOf('simpleenemymod:') === 0) {
+    fdTrackedSem.push(entity)
+    return
+  }
+  if (!fdIsRobot(entity)) return
+  if (!entity.getTags().contains('fd_robot')) {
+    event.cancel()
+    return
+  }
+  fdTrackedRobots.push(entity)
+})
