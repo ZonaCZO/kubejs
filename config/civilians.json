@@ -1,0 +1,15 @@
+{
+  "enabled": true,
+  "nationalities": ["Ukrainian", "Russian", "Polish", "German", "French", "British", "American", "Canadian", "Italian", "Spanish", "Japanese", "Chinese", "Northlander", "Southlander"],
+  "initialPlayerSupportChance": 0.2,
+  "initialInvaderSupportChance": 0.2,
+  "startingTrust": 50,
+  "startingFear": 0,
+  "playerAttackTrustLoss": 12,
+  "playerAttackFearGain": 18,
+  "civilianDeathTrustLoss": 8,
+  "civilianDeathFearGain": 12,
+  "invaderAttackTrustGain": 4,
+  "fearRecoveryPerMinute": 1,
+  "nearbyDeathRadius": 32
+}
