@@ -134,8 +134,9 @@ function fdGameTime(server) {
 }
 
 function fdOpsLoad(server) {
+  var migrated = false
   try {
-    var migrated=server.persistentData.contains(fdOpsStorage())
+    migrated=server.persistentData.contains(fdOpsStorage())
     fdOps = server.persistentData.contains(migrated?fdOpsStorage():'front_director_v6_ops')
       ? JSON.parse(String(server.persistentData.getString(migrated?fdOpsStorage():'front_director_v6_ops')))
       : { liberated: {}, protection: {}, garrisons: {}, alerts: {} }
@@ -289,8 +290,9 @@ function fdSave(server) {
 }
 
 function fdLoadState(server) {
+  var migrated = false
   try {
-    var migrated=server.persistentData.contains(fdStateStorage())
+    migrated=server.persistentData.contains(fdStateStorage())
     fdState = server.persistentData.contains(migrated?fdStateStorage():'front_director_v3_state')
       ? JSON.parse(String(server.persistentData.getString(migrated?fdStateStorage():'front_director_v3_state')))
       : {}
