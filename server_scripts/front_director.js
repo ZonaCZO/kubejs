@@ -854,28 +854,6 @@ function fdGarrisonCommand(context, mode) {
   return 1
 }
 
-function fdCommandoCommand(context) {
-  var source = context.source
-  var player = source.player
-  if (player == null) return 0
-  var server = source.server
-  var ownerTag = 'fd_commando_' + String(player.username)
-  if (fdCount(server, `@e[tag=${ownerTag}]`) > 0) {
-    fdTellPlayer(server, player, 'Твой отряд коммандос уже находится в мире.', 'yellow')
-    return 0
-  }
-  if (!fdPay(server, player, fdCostFor('commando', 1))) {
-    fdTellPlayer(server, player, 'Недостаточно ресурсов для отряда коммандос.', 'red')
-    return 0
-  }
-  var size = fdOptionNumber('commandoSize', 4)
-  fdSpawnFriendlySquad(server, player, fdConfig.commandoEntity || 'simpleenemymod:pmcunit', size, ownerTag)
-  fdScoreAdd(server, player, 'front_commandos', 1)
-  fdScoreAdd(server, player, 'front_supplies', fdCostItemCount(fdCostFor('commando', 1), 'kubejs:military_supply_crate'))
-  fdTellPlayer(server, player, 'Отряд коммандос из ' + size + ' бойцов прибыл.', 'green')
-  return 1
-}
-
 function fdHqPayload(server, player) {
   var sx = fdSX(player.x)
   var sz = fdSZ(player.z)
@@ -1008,7 +986,6 @@ NetworkEvents.dataReceived('front:hq_request', event => {
   if (action === 'map') fdFrontMapCommand({source: {player: player, server: server}})
   if (action === 'garrison') fdCmd(server, 'execute as ' + String(player.username) + ' run front garrison')
   else if (action === 'upgrade') fdCmd(server, 'execute as ' + String(player.username) + ' run front garrison upgrade')
-  else if (action === 'commando') fdCmd(server, 'execute as ' + String(player.username) + ' run front squad commando')
   else if (action === 'state_name') {
     if (fdSetStateName(player, event.data.name)) fdTellPlayer(server, player, 'Название государства изменено на «' + fdStateName(player) + '».', 'green')
     else fdTellPlayer(server, player, 'Название должно содержать от 3 до 32 символов.', 'red')
@@ -1029,7 +1006,7 @@ function fdHasWarServiceTag(entity) {
     var iterator = entity.getTags().iterator()
     while (iterator.hasNext()) {
       var tag = String(iterator.next())
-      if (tag === 'fd_robot' || tag.indexOf('fd_garrison_') === 0 || tag.indexOf('fd_commando_') === 0) return true
+      if (tag === 'fd_robot' || tag.indexOf('fd_garrison_') === 0) return true
     }
   } catch (ignored) {}
   return false
@@ -1082,7 +1059,7 @@ function fdResetWar(context) {
 function fdResetWarning(context) {
   if (context.source.player != null) {
     fdTellPlayer(context.source.server, context.source.player,
-      'Полный сброс удалит роботов, ТрО и коммандос, а также очистит контроль секторов. Для подтверждения: /front reset confirm', 'red')
+      'Полный сброс удалит роботов и ТрО, а также очистит контроль секторов. Для подтверждения: /front reset confirm', 'red')
   }
   return 1
 }
@@ -1101,8 +1078,6 @@ ServerEvents.commandRegistry(event => {
         .executes(context => fdGarrisonCommand(context, 'deploy'))
         .then(Commands.literal('upgrade').executes(context => fdGarrisonCommand(context, 'upgrade')))
         .then(Commands.literal('status').executes(context => fdGarrisonCommand(context, 'status'))))
-      .then(Commands.literal('squad')
-        .then(Commands.literal('commando').executes(context => fdCommandoCommand(context))))
       .then(Commands.literal('purge')
         .requires(source => source.hasPermission(2))
         .executes(context => fdPurgeCommand(context)))
@@ -1185,7 +1160,6 @@ function fdInitialize(server) {
     fdCmd(server, 'scoreboard objectives add fd_tmp dummy')
     fdCmd(server, 'scoreboard objectives add front_sectors dummy')
     fdCmd(server, 'scoreboard objectives add front_garrison dummy')
-    fdCmd(server, 'scoreboard objectives add front_commandos dummy')
     fdCmd(server, 'scoreboard objectives add front_supplies dummy')
     fdLoadState(server)
     fdOpsLoad(server)
