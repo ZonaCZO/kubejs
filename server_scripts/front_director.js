@@ -25,6 +25,48 @@ var fdTerrainCache = {}
 var fdSupplyCache = {}
 var fdOps = { liberated: {}, protection: {}, garrisons: {}, alerts: {} }
 var fdOpsDirty = false
+var fdMapConfigWarning = ''
+
+// Called by the map bridge every 20 seconds, not on every game tick.
+function fdRefreshMapConfig(server) {
+  if (!fdInitialized) return
+  try {
+    var next = JsonIO.read(FD_CONFIG)
+    if (!next) throw new Error('Config missing or invalid JSON')
+    if (Number(next.sectorSize)!==Number(fdConfig.sectorSize))
+      throw new Error('sectorSize changed: live reload refused to preserve sector ownership; use a planned war reset')
+    var lists=['warAreas','safeZones','origins']
+    for(var l=0;l<lists.length;l++) {
+      var list=next[lists[l]]
+      if(list==null || typeof list.length==='undefined') throw new Error('Invalid '+lists[l])
+      for(var i=0;i<list.length;i++) {
+        var fields=lists[l]==='origins'?['x','z']:['x1','z1','x2','z2']
+        for(var f=0;f<fields.length;f++) {
+          if(list[i][fields[f]]==null || !isFinite(Number(list[i][fields[f]]))) throw new Error('Invalid coordinate in '+lists[l])
+        }
+      }
+    }
+    var changed=JSON.stringify([next.warAreas,next.safeZones,next.origins])!==
+      JSON.stringify([fdConfig.warAreas,fdConfig.safeZones,fdConfig.origins])
+    if(changed) {
+      fdConfig.warAreas=next.warAreas
+      fdConfig.safeZones=next.safeZones
+      fdConfig.origins=next.origins
+      fdTerrainCache={}; fdCityCache={}; fdSupplyCache={}
+      for(var o=0;o<fdConfig.origins.length;o++) {
+        var origin=fdConfig.origins[o],sx=fdSX(origin.x),sz=fdSZ(origin.z)
+        if(fdAllowedSector(sx,sz) && fdState[fdKey(sx,sz)]==null) fdSetControl(sx,sz,100)
+      }
+      fdRebuildSupply()
+      console.info('[Front Map] War areas, safe zones and origins reloaded; existing sector state preserved')
+    }
+    fdMapConfigWarning=''
+  } catch(error) {
+    var warning=String(error)
+    if(warning!==fdMapConfigWarning) console.error('[Front Map] Keeping previous config: '+warning)
+    fdMapConfigWarning=warning
+  }
+}
 
 var FD_AI_INTERVAL = 80 // 4 seconds; low-CPU combat network
 var FD_ENTITY_SCAN_INTERVAL = 400 // full world scan only every 20 seconds
@@ -167,6 +209,7 @@ function fdSectorTerrain(level, sx, sz) {
   var points = [[0.5,0.5],[0.25,0.25],[0.75,0.25],[0.25,0.75],[0.75,0.75]]
   var peaks = 0
   var rivers = 0
+  var oceans = 0
   var known = 0
   for (var i = 0; i < points.length; i++) {
     var id = fdBiomeIdAtLoaded(level,
@@ -176,12 +219,14 @@ function fdSectorTerrain(level, sx, sz) {
     known++
     if (id.indexOf('peak') >= 0 || id.indexOf('mountain') >= 0) peaks++
     if (id.indexOf('river') >= 0) rivers++
+    if (id.indexOf('ocean') >= 0) oceans++
   }
   // Unknown/unloaded terrain never forces chunk generation on the server thread.
   var result = { name: 'обычная местность', factor: 1.0 }
-  if (rivers > 0) result = { name: 'река', factor: fdOptionNumber('riverExpansionFactor', 0.20) }
+  if (known >= 3 && oceans / known >= 0.6) result = { name: 'океан', factor: 0, ocean: true }
+  else if (rivers > 0) result = { name: 'река', factor: fdOptionNumber('riverExpansionFactor', 0.20) }
   else if (peaks > 0) result = { name: 'горы', factor: fdOptionNumber('peakExpansionFactor', 0.35) }
-  if (known > 0) fdTerrainCache[key] = result
+  if (known === points.length) fdTerrainCache[key] = result
   return result
 }
 
@@ -326,6 +371,7 @@ function fdStrategicExpansion(server) {
 
   for (var i = 0; i < limit; i++) {
     var terrain = fdSectorTerrain(level, candidates[i].sx, candidates[i].sz)
+    if (terrain.ocean) continue
     var strategicGain = Math.max(1, Math.round(Number(fdConfig.expansionControlGain) *
       fdStrength(candidates[i].sx, candidates[i].sz) * terrain.factor))
     var candidateKey = fdKey(candidates[i].sx, candidates[i].sz)
@@ -600,6 +646,7 @@ function fdIsCitySector(level, sx, sz) {
 }
 
 function fdSpawnRobot(server, level, sx, sz, anchor, forcedType) {
+  if (fdSectorTerrain(level, sx, sz).ocean) return false
   var size = Number(fdConfig.sectorSize)
   var margin = 20
   for (var attempt = 0; attempt < Number(fdConfig.surfaceAttempts); attempt++) {
@@ -707,6 +754,7 @@ function fdEnemyName(server) {
 // Read-only bridge for the CC tactical map. No war-management authority is exposed.
 global.frontMapBuild = function(server) {
   if (!fdInitialized && !fdInitialize(server)) return null
+  fdRefreshMapConfig(server)
   function rectangles(source) {
     var result = []
     for (var i=0;i<source.length;i++) result.push({name:String(source[i].name || ''),
