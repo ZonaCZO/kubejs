@@ -373,7 +373,7 @@ function fdLiberateSector(server, sx, sz, liberator) {
   fdOps.alerts[key] = 0
   fdOpsDirty = true
   if (liberator != null) fdScoreAdd(server, liberator, 'front_sectors', 1)
-  fdTell(server, `Сектор ${sx},${sz} освобождён (${who}). Остатки сил Warium уничтожены.`, 'green')
+  fdTell(server, `Сектор ${sx},${sz} освобождён (${who}). Остатки сил ${fdEnemyName(server)} уничтожены.`, 'green')
 }
 
 function fdDefenderCount(server, sx, sz) {
@@ -668,7 +668,7 @@ function fdShowPlayerStatus(server, player) {
     label = 'ЛИНИЯ ФРОНТА'
     color = 'gold'
   } else if (control >= 100) {
-    label = 'тыл Warium'
+    label = 'тыл ' + fdEnemyName(server)
     color = 'red'
   } else if (control > 0) {
     label = 'спорная территория'
@@ -697,6 +697,28 @@ function fdStatusCommand(context) {
 function fdTellPlayer(server, player, text, color) {
   var message = JSON.stringify({text: '[Фронт] ' + text, color: color || 'gold'})
   fdCmd(server, 'tellraw ' + String(player.username) + ' ' + message)
+}
+
+function fdEnemyName(server) {
+  var name = String(server.persistentData.getString('front_enemy_name'))
+  return name.length >= 3 ? name : 'Legion'
+}
+
+// Read-only bridge for the CC tactical map. No war-management authority is exposed.
+global.frontMapBuild = function(server) {
+  if (!fdInitialized && !fdInitialize(server)) return null
+  function rectangles(source) {
+    var result = []
+    for (var i=0;i<source.length;i++) result.push({name:String(source[i].name || ''),
+      x1:Number(source[i].x1),z1:Number(source[i].z1),x2:Number(source[i].x2),z2:Number(source[i].z2)})
+    return result
+  }
+  var origins=[]
+  for(var i=0;i<fdConfig.origins.length;i++) origins.push({name:String(fdConfig.origins[i].name || ''),
+    x:Number(fdConfig.origins[i].x),z:Number(fdConfig.origins[i].z)})
+  return JSON.stringify({version: 1, sector_size: Number(fdConfig.sectorSize),
+    enemy: fdEnemyName(server), areas: rectangles(fdConfig.warAreas), safe_zones: rectangles(fdConfig.safeZones),
+    origins: origins, controls: fdState, garrisons: fdOps.garrisons})
 }
 
 function fdStateName(player) {
@@ -832,28 +854,6 @@ function fdGarrisonCommand(context, mode) {
   return 1
 }
 
-function fdCommandoCommand(context) {
-  var source = context.source
-  var player = source.player
-  if (player == null) return 0
-  var server = source.server
-  var ownerTag = 'fd_commando_' + String(player.username)
-  if (fdCount(server, `@e[tag=${ownerTag}]`) > 0) {
-    fdTellPlayer(server, player, 'Твой отряд коммандос уже находится в мире.', 'yellow')
-    return 0
-  }
-  if (!fdPay(server, player, fdCostFor('commando', 1))) {
-    fdTellPlayer(server, player, 'Недостаточно ресурсов для отряда коммандос.', 'red')
-    return 0
-  }
-  var size = fdOptionNumber('commandoSize', 4)
-  fdSpawnFriendlySquad(server, player, fdConfig.commandoEntity || 'simpleenemymod:pmcunit', size, ownerTag)
-  fdScoreAdd(server, player, 'front_commandos', 1)
-  fdScoreAdd(server, player, 'front_supplies', fdCostItemCount(fdCostFor('commando', 1), 'kubejs:military_supply_crate'))
-  fdTellPlayer(server, player, 'Отряд коммандос из ' + size + ' бойцов прибыл.', 'green')
-  return 1
-}
-
 function fdHqPayload(server, player) {
   var sx = fdSX(player.x)
   var sz = fdSZ(player.z)
@@ -865,6 +865,9 @@ function fdHqPayload(server, player) {
     (fdInSafeZone(player.x, player.z) ? 'Безопасная зона' :
       (fdIsFrontier(sx, sz) ? 'Линия фронта' : (control > 0 ? 'Территория Warium' : 'Свободный сектор')))
   return {
+    enemyName: fdEnemyName(server), language: String(player.persistentData.getString('front_language') || 'ru'),
+    canEdit: player.hasPermissions(2),
+    zoneCode: !fdInWarArea(player.x, player.z) ? 'outside' : (fdInSafeZone(player.x, player.z) ? 'safe' : (fdIsFrontier(sx, sz) ? 'front' : (control > 0 ? 'enemy' : 'free'))),
     stateName: fdStateName(player), sector: key, control: Math.round(control), zone: zone,
     terrain: terrain.name, supplied: control > 0 ? fdIsSupplied(sx, sz) : true,
     garrisonLevel: garrison ? Number(garrison.level) : 0,
@@ -933,7 +936,7 @@ function fdFrontMapCommand(context) {
   // green nearest garrison, aqua nearest configured safe base.
   if (fdConfig.origins && fdConfig.origins.length > 0) {
     var origin = fdConfig.origins[0]
-    fdXaeroWaypoint(server, player, 'TMP_WARIUM_ORIGIN', 'W', origin.x, 90, origin.z, 4)
+    fdXaeroWaypoint(server, player, 'TMP_' + fdEnemyName(server) + '_ORIGIN', 'W', origin.x, 90, origin.z, 4)
   }
 
   var nearestGarrison = null
@@ -972,9 +975,17 @@ NetworkEvents.dataReceived('front:hq_request', event => {
   var server = player.server
   if (!fdInitialized && !fdInitialize(server)) return
   var action = String(event.data.action || 'refresh')
+  if (action === 'enemy_name' && player.hasPermissions(2)) {
+    var enemyName = String(event.data.name || '').replace(/[\x00-\x1F\x7F§:]/g, '').trim()
+    if (enemyName.length >= 3 && enemyName.length <= 32) server.persistentData.putString('front_enemy_name', enemyName)
+  }
+  if (action === 'language') {
+    var selectedLanguage = String(event.data.language)
+    if (selectedLanguage === 'ru' || selectedLanguage === 'uk' || selectedLanguage === 'en') player.persistentData.putString('front_language', selectedLanguage)
+  }
+  if (action === 'map') fdFrontMapCommand({source: {player: player, server: server}})
   if (action === 'garrison') fdCmd(server, 'execute as ' + String(player.username) + ' run front garrison')
   else if (action === 'upgrade') fdCmd(server, 'execute as ' + String(player.username) + ' run front garrison upgrade')
-  else if (action === 'commando') fdCmd(server, 'execute as ' + String(player.username) + ' run front squad commando')
   else if (action === 'state_name') {
     if (fdSetStateName(player, event.data.name)) fdTellPlayer(server, player, 'Название государства изменено на «' + fdStateName(player) + '».', 'green')
     else fdTellPlayer(server, player, 'Название должно содержать от 3 до 32 символов.', 'red')
@@ -995,7 +1006,7 @@ function fdHasWarServiceTag(entity) {
     var iterator = entity.getTags().iterator()
     while (iterator.hasNext()) {
       var tag = String(iterator.next())
-      if (tag === 'fd_robot' || tag.indexOf('fd_garrison_') === 0 || tag.indexOf('fd_commando_') === 0) return true
+      if (tag === 'fd_robot' || tag.indexOf('fd_garrison_') === 0) return true
     }
   } catch (ignored) {}
   return false
@@ -1048,7 +1059,7 @@ function fdResetWar(context) {
 function fdResetWarning(context) {
   if (context.source.player != null) {
     fdTellPlayer(context.source.server, context.source.player,
-      'Полный сброс удалит роботов, ТрО и коммандос, а также очистит контроль секторов. Для подтверждения: /front reset confirm', 'red')
+      'Полный сброс удалит роботов и ТрО, а также очистит контроль секторов. Для подтверждения: /front reset confirm', 'red')
   }
   return 1
 }
@@ -1067,8 +1078,6 @@ ServerEvents.commandRegistry(event => {
         .executes(context => fdGarrisonCommand(context, 'deploy'))
         .then(Commands.literal('upgrade').executes(context => fdGarrisonCommand(context, 'upgrade')))
         .then(Commands.literal('status').executes(context => fdGarrisonCommand(context, 'status'))))
-      .then(Commands.literal('squad')
-        .then(Commands.literal('commando').executes(context => fdCommandoCommand(context))))
       .then(Commands.literal('purge')
         .requires(source => source.hasPermission(2))
         .executes(context => fdPurgeCommand(context)))
@@ -1151,7 +1160,6 @@ function fdInitialize(server) {
     fdCmd(server, 'scoreboard objectives add fd_tmp dummy')
     fdCmd(server, 'scoreboard objectives add front_sectors dummy')
     fdCmd(server, 'scoreboard objectives add front_garrison dummy')
-    fdCmd(server, 'scoreboard objectives add front_commandos dummy')
     fdCmd(server, 'scoreboard objectives add front_supplies dummy')
     fdLoadState(server)
     fdOpsLoad(server)
