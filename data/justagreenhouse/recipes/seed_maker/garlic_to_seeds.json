@@ -1,0 +1,1 @@
+{"type":"forge:conditional","recipes":[{"conditions":[{"type":"forge:item_exists","item":"veggiesdelight:garlic"}],"recipe":{"type":"justagreenhouse:seed_maker","ingredient":{"item":"veggiesdelight:garlic"},"result":"justagreenhouse:garlic_seed_bag","count":1}}]}

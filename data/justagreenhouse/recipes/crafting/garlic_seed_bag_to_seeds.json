@@ -1,0 +1,1 @@
+{"type":"forge:conditional","recipes":[{"conditions":[{"type":"forge:item_exists","item":"justagreenhouse:garlic_seed_bag"},{"type":"forge:item_exists","item":"veggiesdelight:garlic_clove"}],"recipe":{"type":"minecraft:crafting_shapeless","ingredients":[{"item":"justagreenhouse:garlic_seed_bag"}],"result":{"item":"veggiesdelight:garlic_clove","count":9}}}]}

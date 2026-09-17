@@ -1,0 +1,1 @@
+{"type":"forge:conditional","recipes":[{"conditions":[{"type":"forge:item_exists","item":"neapolitan:strawberries"}],"recipe":{"type":"justagreenhouse:seed_maker","ingredient":{"item":"neapolitan:strawberries"},"result":"justagreenhouse:strawberry_pips_bag","count":1}}]}

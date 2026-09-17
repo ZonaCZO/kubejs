@@ -1,0 +1,1 @@
+{"type":"forge:conditional","recipes":[{"conditions":[{"type":"forge:item_exists","item":"justagreenhouse:turnip_seed_bag"},{"type":"forge:item_exists","item":"veggiesdelight:turnip_seeds"}],"recipe":{"type":"minecraft:crafting_shaped","pattern":["iii","iii","iii"],"key":{"i":{"item":"veggiesdelight:turnip_seeds"}},"result":{"item":"justagreenhouse:turnip_seed_bag","count":1}}}]}

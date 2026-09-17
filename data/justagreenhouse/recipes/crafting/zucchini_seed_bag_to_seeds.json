@@ -1,0 +1,1 @@
+{"type":"forge:conditional","recipes":[{"conditions":[{"type":"forge:item_exists","item":"justagreenhouse:zucchini_seed_bag"},{"type":"forge:item_exists","item":"veggiesdelight:zucchini_seeds"}],"recipe":{"type":"minecraft:crafting_shapeless","ingredients":[{"item":"justagreenhouse:zucchini_seed_bag"}],"result":{"item":"veggiesdelight:zucchini_seeds","count":9}}}]}

@@ -1,0 +1,1 @@
+{"type":"forge:conditional","recipes":[{"conditions":[{"type":"forge:item_exists","item":"atmospheric:dragon_fruit"}],"recipe":{"type":"justagreenhouse:seed_maker","ingredient":{"item":"atmospheric:dragon_fruit"},"result":"justagreenhouse:dragon_roots_bag","count":1}}]}

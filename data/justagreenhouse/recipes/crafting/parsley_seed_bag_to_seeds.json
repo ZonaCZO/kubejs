@@ -1,0 +1,1 @@
+{"type":"forge:conditional","recipes":[{"conditions":[{"type":"forge:item_exists","item":"justagreenhouse:parsley_seed_bag"},{"type":"forge:item_exists","item":"ramadandelight:parsley_seeds"}],"recipe":{"type":"minecraft:crafting_shapeless","ingredients":[{"item":"justagreenhouse:parsley_seed_bag"}],"result":{"item":"ramadandelight:parsley_seeds","count":9}}}]}

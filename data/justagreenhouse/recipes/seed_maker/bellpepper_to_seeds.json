@@ -1,0 +1,1 @@
+{"type":"forge:conditional","recipes":[{"conditions":[{"type":"forge:item_exists","item":"veggiesdelight:bellpepper"}],"recipe":{"type":"justagreenhouse:seed_maker","ingredient":{"item":"veggiesdelight:bellpepper"},"result":"justagreenhouse:bellpepper_seed_bag","count":1}}]}

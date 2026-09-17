@@ -1,0 +1,1 @@
+{"type":"forge:conditional","recipes":[{"conditions":[{"type":"forge:item_exists","item":"collectorsreap:pomegranate_seeds"},{"type":"forge:item_exists","item":"justagreenhouse:pomegranate_seed_bag"}],"recipe":{"type":"minecraft:crafting_shapeless","ingredients":[{"item":"justagreenhouse:pomegranate_seed_bag"}],"result":{"item":"collectorsreap:pomegranate_seeds","count":9}}}]}

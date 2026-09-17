@@ -1,0 +1,1 @@
+{"type":"forge:conditional","recipes":[{"conditions":[{"type":"forge:item_exists","item":"berry_good:sweet_berry_pips"},{"type":"forge:item_exists","item":"justagreenhouse:sweet_berries_pips_bag"}],"recipe":{"type":"minecraft:crafting_shapeless","ingredients":[{"item":"justagreenhouse:sweet_berries_pips_bag"}],"result":{"item":"berry_good:sweet_berry_pips","count":9}}}]}

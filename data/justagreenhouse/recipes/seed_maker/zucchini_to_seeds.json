@@ -1,0 +1,1 @@
+{"type":"forge:conditional","recipes":[{"conditions":[{"type":"forge:item_exists","item":"veggiesdelight:zucchini"}],"recipe":{"type":"justagreenhouse:seed_maker","ingredient":{"item":"veggiesdelight:zucchini"},"result":"justagreenhouse:zucchini_seed_bag","count":1}}]}

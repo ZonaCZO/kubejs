@@ -1,0 +1,1 @@
+{"type":"forge:conditional","recipes":[{"conditions":[{"type":"forge:item_exists","item":"atmospheric:aloe_leaves"}],"recipe":{"type":"justagreenhouse:seed_maker","ingredient":{"item":"atmospheric:aloe_leaves"},"result":"justagreenhouse:aloe_kernels_bag","count":1}}]}

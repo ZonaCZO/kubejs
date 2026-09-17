@@ -1,0 +1,1 @@
+{"type":"forge:conditional","recipes":[{"conditions":[{"type":"forge:item_exists","item":"justagreenhouse:broccoli_seed_bag"},{"type":"forge:item_exists","item":"veggiesdelight:broccoli_seeds"}],"recipe":{"type":"minecraft:crafting_shapeless","ingredients":[{"item":"justagreenhouse:broccoli_seed_bag"}],"result":{"item":"veggiesdelight:broccoli_seeds","count":9}}}]}

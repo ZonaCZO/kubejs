@@ -1,0 +1,1 @@
+{"type":"forge:conditional","recipes":[{"conditions":[{"type":"forge:item_exists","item":"create_train_additions:deleted_mod_element"}],"recipe":{"type":"minecraft:crafting_shaped","category":"misc","pattern":["a"],"key":{"a":{"item":"create_train_additions:deleted_mod_element"}},"result":{"item":"create_train_additions:deleted_mod_element","count":1}}}]}

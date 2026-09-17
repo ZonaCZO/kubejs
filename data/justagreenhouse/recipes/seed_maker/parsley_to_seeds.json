@@ -1,0 +1,1 @@
+{"type":"forge:conditional","recipes":[{"conditions":[{"type":"forge:item_exists","item":"ramadandelight:parsley"}],"recipe":{"type":"justagreenhouse:seed_maker","ingredient":{"item":"ramadandelight:parsley"},"result":"justagreenhouse:parsley_seed_bag","count":1}}]}

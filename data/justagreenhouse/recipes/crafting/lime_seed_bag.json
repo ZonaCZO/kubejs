@@ -1,0 +1,1 @@
+{"type":"forge:conditional","recipes":[{"conditions":[{"type":"forge:item_exists","item":"collectorsreap:lime_seeds"},{"type":"forge:item_exists","item":"justagreenhouse:lime_seed_bag"}],"recipe":{"type":"minecraft:crafting_shaped","pattern":["iii","iii","iii"],"key":{"i":{"item":"collectorsreap:lime_seeds"}},"result":{"item":"justagreenhouse:lime_seed_bag","count":1}}}]}

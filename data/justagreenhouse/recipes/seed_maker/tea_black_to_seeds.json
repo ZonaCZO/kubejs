@@ -1,0 +1,1 @@
+{"type":"forge:conditional","recipes":[{"conditions":[{"type":"forge:item_exists","item":"farmersrespite:black_tea_leaves"}],"recipe":{"type":"justagreenhouse:seed_maker","ingredient":{"item":"farmersrespite:black_tea_leaves"},"result":"farmersrespite:tea_seeds","count":3}}]}

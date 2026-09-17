@@ -1,0 +1,1 @@
+{"type":"forge:conditional","recipes":[{"conditions":[{"type":"forge:false"}],"recipe":{"type":"minecraft:crafting_shaped","category":"misc","pattern":["   ","   ","   "],"key":{},"result":{"item":"create_train_additions:pole","count":6}}}]}

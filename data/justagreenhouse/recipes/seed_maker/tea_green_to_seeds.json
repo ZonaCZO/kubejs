@@ -1,0 +1,1 @@
+{"type":"forge:conditional","recipes":[{"conditions":[{"type":"forge:item_exists","item":"farmersrespite:green_tea_leaves"}],"recipe":{"type":"justagreenhouse:seed_maker","ingredient":{"item":"farmersrespite:green_tea_leaves"},"result":"justagreenhouse:tea_seed_bag","count":1}}]}

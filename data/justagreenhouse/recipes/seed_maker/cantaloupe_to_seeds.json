@@ -1,0 +1,1 @@
+{"type":"forge:conditional","recipes":[{"conditions":[{"type":"forge:item_exists","item":"delightful:cantaloupe"}],"recipe":{"type":"justagreenhouse:seed_maker","ingredient":{"item":"delightful:cantaloupe"},"result":"justagreenhouse:cantaloupe_seed_bag","count":1}}]}

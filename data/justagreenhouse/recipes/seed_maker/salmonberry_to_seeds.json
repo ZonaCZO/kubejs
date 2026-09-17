@@ -1,0 +1,1 @@
+{"type":"forge:conditional","recipes":[{"conditions":[{"type":"forge:item_exists","item":"delightful:salmonberries"}],"recipe":{"type":"justagreenhouse:seed_maker","ingredient":{"item":"delightful:salmonberries"},"result":"justagreenhouse:salmonberry_seed_bag","count":1}}]}

@@ -1,0 +1,1 @@
+{"type":"forge:conditional","recipes":[{"conditions":[{"type":"forge:item_exists","item":"justagreenhouse:mint_sprouts_bag"},{"type":"forge:item_exists","item":"neapolitan:mint_sprout"}],"recipe":{"type":"minecraft:crafting_shaped","pattern":["iii","iii","iii"],"key":{"i":{"item":"neapolitan:mint_sprout"}},"result":{"item":"justagreenhouse:mint_sprouts_bag","count":1}}}]}

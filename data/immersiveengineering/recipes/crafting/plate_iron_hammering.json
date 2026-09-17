@@ -1,0 +1,1 @@
+{"type":"forge:conditional","recipes":[{"conditions":[{"type":"forge:item_exists","item":"immersiveengineering:plate_iron"}],"recipe":{"type":"minecraft:crafting_shapeless","category":"misc","ingredients":[{"tag":"forge:ingots/iron"},{"tag":"immersiveengineering:tools/hammers"}],"result":{"item":"immersiveengineering:plate_iron"}}}]}

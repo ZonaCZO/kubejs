@@ -1,0 +1,1 @@
+{"type":"forge:conditional","recipes":[{"conditions":[{"type":"forge:item_exists","item":"atmospheric:passion_fruit_vine"},{"type":"forge:item_exists","item":"justagreenhouse:passionfruit_vine_bag"}],"recipe":{"type":"minecraft:crafting_shapeless","ingredients":[{"item":"justagreenhouse:passionfruit_vine_bag"}],"result":{"item":"atmospheric:passion_fruit_vine","count":9}}}]}

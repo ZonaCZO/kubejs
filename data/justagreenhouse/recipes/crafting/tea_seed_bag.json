@@ -1,0 +1,1 @@
+{"type":"forge:conditional","recipes":[{"conditions":[{"type":"forge:item_exists","item":"farmersrespite:tea_seeds"},{"type":"forge:item_exists","item":"justagreenhouse:tea_seed_bag"}],"recipe":{"type":"minecraft:crafting_shaped","pattern":["iii","iii","iii"],"key":{"i":{"item":"farmersrespite:tea_seeds"}},"result":{"item":"justagreenhouse:tea_seed_bag","count":1}}}]}

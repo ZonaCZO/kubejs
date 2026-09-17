@@ -1,0 +1,1 @@
+{"type":"forge:conditional","recipes":[{"conditions":[{"type":"forge:item_exists","item":"veggiesdelight:broccoli"}],"recipe":{"type":"justagreenhouse:seed_maker","ingredient":{"item":"veggiesdelight:broccoli"},"result":"justagreenhouse:broccoli_seed_bag","count":1}}]}

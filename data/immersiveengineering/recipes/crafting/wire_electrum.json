@@ -1,0 +1,1 @@
+{"type":"forge:conditional","recipes":[{"conditions":[{"type":"forge:item_exists","item":"immersiveengineering:wire_electrum"}],"recipe":{"type":"minecraft:crafting_shapeless","category":"misc","ingredients":[{"tag":"forge:plates/electrum"},{"tag":"immersiveengineering:tools/wirecutters"}],"result":{"item":"immersiveengineering:wire_electrum"}}}]}

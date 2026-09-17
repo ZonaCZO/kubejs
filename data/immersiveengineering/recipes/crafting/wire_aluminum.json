@@ -1,0 +1,1 @@
+{"type":"forge:conditional","recipes":[{"conditions":[{"type":"forge:item_exists","item":"immersiveengineering:wire_aluminum"}],"recipe":{"type":"minecraft:crafting_shapeless","category":"misc","ingredients":[{"tag":"forge:plates/aluminum"},{"tag":"immersiveengineering:tools/wirecutters"}],"result":{"item":"immersiveengineering:wire_aluminum"}}}]}

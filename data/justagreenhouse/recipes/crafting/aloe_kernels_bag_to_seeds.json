@@ -1,0 +1,1 @@
+{"type":"forge:conditional","recipes":[{"conditions":[{"type":"forge:item_exists","item":"atmospheric:aloe_kernels"},{"type":"forge:item_exists","item":"justagreenhouse:aloe_kernels_bag"}],"recipe":{"type":"minecraft:crafting_shapeless","ingredients":[{"item":"justagreenhouse:aloe_kernels_bag"}],"result":{"item":"atmospheric:aloe_kernels","count":9}}}]}

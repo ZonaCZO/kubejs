@@ -1,0 +1,1 @@
+{"type":"forge:conditional","recipes":[{"conditions":[{"type":"forge:item_exists","item":"justagreenhouse:strawberry_pips_bag"},{"type":"forge:item_exists","item":"neapolitan:strawberry_pips"}],"recipe":{"type":"minecraft:crafting_shapeless","ingredients":[{"item":"justagreenhouse:strawberry_pips_bag"}],"result":{"item":"neapolitan:strawberry_pips","count":9}}}]}

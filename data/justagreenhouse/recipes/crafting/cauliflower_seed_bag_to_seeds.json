@@ -1,0 +1,1 @@
+{"type":"forge:conditional","recipes":[{"conditions":[{"type":"forge:item_exists","item":"justagreenhouse:cauliflower_seed_bag"},{"type":"forge:item_exists","item":"veggiesdelight:cauliflower_seeds"}],"recipe":{"type":"minecraft:crafting_shapeless","ingredients":[{"item":"justagreenhouse:cauliflower_seed_bag"}],"result":{"item":"veggiesdelight:cauliflower_seeds","count":9}}}]}
