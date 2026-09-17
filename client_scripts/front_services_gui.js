@@ -12,7 +12,7 @@ NetworkEvents.dataReceived('front:services_data',event=>{
 GUIEvents.createUI('front:services',event=>{
  var t=fsText[String(fsData.language)] || fsText.ru,tab=String(fsData.tab),w=320,h=246
  var x=(Client.window.guiScaledWidth-w)/2,y=(Client.window.guiScaledHeight-h)/2
- event.setBackground('minecraft:textures/gui/demo_background.png',x,y,w,h);event.pauseGame(false);event.background(true)
+ event.setBackground('kubejs:textures/gui/front_services.png',x,y,w,h);event.pauseGame(false);event.background(true)
  event.button(t.mail,x+8,y+8,94,20).onClick(()=>fsRequest('mail'))
  event.button(t.profile,x+110,y+8,98,20).onClick(()=>fsRequest('profile'))
  event.button(t.missions,x+216,y+8,96,20).onClick(()=>fsRequest('missions'))

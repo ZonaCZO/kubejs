@@ -71,8 +71,13 @@ function mcLoadConfig() {
 
 function mcInSafeZone(entity) {
   mcLoadConfig()
-  for (let i = 0; i < mcSafeZones.length; i++) {
-    if (mcInRect(entity.x, entity.z, mcSafeZones[i])) return true
+  let zones=mcSafeZones
+  try {
+    const saved=String(entity.server.persistentData.getString('front_coop_settings'))
+    if(saved)zones=JSON.parse(saved).safeZones
+  } catch(ignored) {}
+  for (let i = 0; i < zones.length; i++) {
+    if (mcInRect(entity.x, entity.z, zones[i])) return true
   }
   return false
 }
@@ -128,9 +133,9 @@ EntityEvents.spawned(event => {
 ServerEvents.tick(event => {
   mcFactionCleanupTick++
   if (mcFactionCleanupTick % 400 !== 0) return
-  var iterator = event.server.overworld().getAllEntities().iterator()
+  const iterator = event.server.overworld().getAllEntities().iterator()
   while (iterator.hasNext()) {
-    var cleanupEntity = iterator.next()
+    const cleanupEntity = iterator.next()
     if (!MC_BLOCKED_FACTION_UNITS[mcEntityId(cleanupEntity)]) continue
     try { cleanupEntity.discard() } catch (ignored) { cleanupEntity.remove('discarded') }
   }

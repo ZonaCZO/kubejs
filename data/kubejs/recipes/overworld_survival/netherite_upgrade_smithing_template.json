@@ -1,0 +1,13 @@
+{
+  "type": "minecraft:crafting_shapeless",
+  "ingredients": [
+    {"item": "minecraft:diamond"},
+    {"item": "minecraft:diamond"},
+    {"item": "minecraft:diamond"},
+    {"item": "minecraft:diamond"},
+    {"item": "minecraft:obsidian"},
+    {"item": "minecraft:netherite_scrap"},
+    {"item": "minecraft:paper"}
+  ],
+  "result": {"item": "minecraft:netherite_upgrade_smithing_template", "count": 1}
+}

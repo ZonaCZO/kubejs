@@ -6,6 +6,142 @@ var FD_Heightmap = Java.loadClass('net.minecraft.world.level.levelgen.Heightmap$
 var FD_LostCities = Java.loadClass('mcjty.lostcities.LostCities')
 
 var FD_CONFIG = 'kubejs/config/front_director_v3.json'
+
+function fcHost(player) {
+  try {
+    var server=player.server, profile=server.getSingleplayerProfile()
+    return server.isSingleplayer() && profile!=null && String(profile.getId())===String(player.uuid)
+  } catch(ignored) {return false}
+}
+function fcOwner(player) {return fcHost(player) || player.hasPermissions(2)}
+function fcGranted(player) {
+  return fcOwner(player) || player.server.persistentData.getBoolean('front_coop_gm_'+String(player.uuid))
+}
+function fcCanEdit(player) {
+  return fcGranted(player) && player.persistentData.getBoolean('front_coop_gm_mode')
+}
+function fcWorldConfig(server,config) {
+  if(!config)return config
+  var text=String(server.persistentData.getString('front_coop_settings'))
+  if(text) {
+    var areas=JSON.parse(text)
+    config.warAreas=areas.warAreas; config.safeZones=areas.safeZones; config.origins=areas.origins
+  }
+  return config
+}
+function fcDraft(player) {
+  var text=String(player.persistentData.getString('front_coop_draft'))
+  return text?JSON.parse(text):{}
+}
+function fcRect(a,b) {
+  return {x1:Math.min(a.x,b.x),z1:Math.min(a.z,b.z),x2:Math.max(a.x,b.x),z2:Math.max(a.z,b.z)}
+}
+function fcValidate(draft,maxSide) {
+  if(!draft.war || !draft.safe || !draft.origin)throw new Error('Mark war area, safe area and enemy origin first.')
+  var rects=[draft.war,draft.safe]
+  for(var i=0;i<rects.length;i++){
+    var r=rects[i],keys=['x1','z1','x2','z2']
+    for(var k=0;k<keys.length;k++)if(!isFinite(Number(r[keys[k]])) || Math.abs(Number(r[keys[k]]))>29000000)throw new Error('Invalid coordinates.')
+    if(r.x2-r.x1<64 || r.z2-r.z1<64 || r.x2-r.x1>maxSide || r.z2-r.z1>maxSide)throw new Error('Area side must be 64..'+maxSide+' blocks.')
+  }
+  var o=draft.origin
+  if(!isFinite(o.x)||!isFinite(o.z)||!fdInRect(o.x,o.z,draft.war)||fdInRect(o.x,o.z,draft.safe))
+    throw new Error('Enemy origin must be inside war area and outside safe area.')
+}
+function fcSend(player,message) {
+  var server=player.server,draft=fcDraft(player)
+  player.sendData('front:coop_data',{language:String(player.persistentData.getString('front_language')||'ru'),
+    granted:fcGranted(player),owner:fcOwner(player),active:fcCanEdit(player),
+    draft:JSON.stringify(draft),message:message||'',armed:Number(player.persistentData.getLong('front_coop_confirm'))>fdGameTime(server),paused:server.persistentData.getBoolean('front_gm_paused')})
+}
+NetworkEvents.dataReceived('front:coop_request',event=>{
+  var player=event.player,server=player.server,action=String(event.data.action||'view'),message=''
+  try {
+    if(action==='view'){fcSend(player);return}
+    if(!fcGranted(player))throw new Error('Only the host, an operator or appointed GM can configure war.')
+    var now=fdGameTime(server)
+    if(Number(player.persistentData.getLong('front_coop_next'))>now)return
+    player.persistentData.putLong('front_coop_next',now+10)
+    if(action==='mode') {
+      player.persistentData.putBoolean('front_coop_gm_mode',!player.persistentData.getBoolean('front_coop_gm_mode'))
+      player.persistentData.putLong('front_coop_confirm',0)
+      fcSend(player);return
+    }
+    if(action==='grant' || action==='revoke') {
+      if(!fcOwner(player))throw new Error('Only the host or an operator may appoint a GM.')
+      var name=String(event.data.name||'')
+      if(!/^[A-Za-z0-9_]{1,16}$/.test(name))throw new Error('Enter a player name.')
+      var target=server.getPlayer(name)
+      if(!target)throw new Error('The player must be online.')
+      server.persistentData.putBoolean('front_coop_gm_'+String(target.uuid),action==='grant')
+      if(action==='revoke')target.persistentData.putBoolean('front_coop_gm_mode',false)
+      fcSend(player);return
+    }
+    if(!fcCanEdit(player))throw new Error('Enable GM mode first.')
+    if(!fdInitialized && !fdInitialize(server))throw new Error('Front director could not initialize.')
+    var draft=fcDraft(player),cfg=JsonIO.read('kubejs/config/front_coop.json')||{}
+    if(action!=='apply' && action!=='arm') {
+      if(String(player.level.dimension)!=='minecraft:overworld')throw new Error('Mark positions in the Overworld.')
+      var here={x:Math.floor(player.x),z:Math.floor(player.z)}
+      if(action==='war_a')draft.warA=here
+      else if(action==='war_b'){if(!draft.warA)throw new Error('Mark first corner.');draft.war=fcRect(draft.warA,here)}
+      else if(action==='safe_a')draft.safeA=here
+      else if(action==='safe_b'){if(!draft.safeA)throw new Error('Mark first corner.');draft.safe=fcRect(draft.safeA,here)}
+      else if(action==='origin')draft.origin=here
+      else if(action==='auto') {
+        var side=Number(event.data.side),direction=String(event.data.direction)
+        if([1024,2048,4096].indexOf(side)<0 || side>Number(cfg.maxWarSide||4096))throw new Error('Invalid area size.')
+        var radius=Number(cfg.defaultSafeRadius||128),half=side/2,inset=fdZoneSize()
+        draft.war=fcRect({x:here.x-half,z:here.z-half},{x:here.x+half,z:here.z+half})
+        draft.safe=fcRect({x:here.x-radius,z:here.z-radius},{x:here.x+radius,z:here.z+radius})
+        draft.origin={x:here.x,z:here.z}
+        if(direction==='north')draft.origin.z-=half-inset
+        else if(direction==='south')draft.origin.z+=half-inset
+        else if(direction==='west')draft.origin.x-=half-inset
+        else if(direction==='east')draft.origin.x+=half-inset
+        else throw new Error('Invalid direction.')
+      } else if(action==='clear')draft={}
+      else throw new Error('Unknown action.')
+      player.persistentData.putString('front_coop_draft',JSON.stringify(draft))
+      player.persistentData.putLong('front_coop_confirm',0)
+    } else {
+      fcValidate(draft,Number(cfg.maxWarSide||4096))
+      if(action==='arm'){
+        player.persistentData.putLong('front_coop_confirm',now+200)
+        player.persistentData.putLong('front_coop_revision',server.persistentData.getLong('front_coop_revision'))
+      }
+      else {
+        if(Number(player.persistentData.getLong('front_coop_confirm'))<=now)throw new Error('Preview and confirm within 10 seconds.')
+        if(Number(player.persistentData.getLong('front_coop_revision'))!==Number(server.persistentData.getLong('front_coop_revision')))
+          throw new Error('Another GM changed boundaries. Review and confirm again.')
+        // Validate the whole tactical sector, not just the origin block.
+        var center=fdSectorCenter(fdSX(draft.origin.x),fdSZ(draft.origin.z))
+        if(!fdInRect(center.x,center.z,draft.war)||fdInRect(center.x,center.z,draft.safe))
+          throw new Error('The origin sector overlaps the safe area or lies outside war.')
+        var areas={warAreas:[draft.war],safeZones:[draft.safe],origins:[draft.origin]}
+        server.persistentData.putString('front_coop_settings',JSON.stringify(areas))
+        server.persistentData.putLong('front_coop_revision',Number(server.persistentData.getLong('front_coop_revision'))+1)
+        fdConfig=fcWorldConfig(server,fdConfig)
+        var existing=fdWorld(server).getAllEntities().iterator()
+        while(existing.hasNext()){
+          var entity=existing.next()
+          if(fdIsRobot(entity) && fdInSafeZone(entity.x,entity.z))entity.discard()
+        }
+        fdTerrainCache={};fdCityCache={};fdSupplyCache={}
+        fdSetControl(fdSX(draft.origin.x),fdSZ(draft.origin.z),100)
+        fdRebuildSupply();fdSave(server)
+        server.persistentData.putBoolean('front_gm_paused',true)
+        player.persistentData.putLong('front_coop_confirm',0)
+        message='Applied. War paused; review the CC map, then resume in HQ.'
+      }
+    }
+    fcSend(player,message)
+  } catch(error) {fcSend(player,String(error).slice(0,180))}
+})
+PlayerEvents.loggedOut(event=>{
+  event.player.persistentData.putBoolean('front_coop_gm_mode',false)
+  event.player.persistentData.putLong('front_coop_confirm',0)
+})
 var FD_CHECK_TICKS = 400 // 20 seconds; low-CPU profile
 
 var fdConfig = null
@@ -56,7 +192,7 @@ function fdExpandLegacy(source) {
 function fdRefreshMapConfig(server) {
   if (!fdInitialized) return
   try {
-    var next = JsonIO.read(FD_CONFIG)
+    var next = fcWorldConfig(server, JsonIO.read(FD_CONFIG))
     if (!next) throw new Error('Config missing or invalid JSON')
     if (Number(next.sectorSize)!==Number(fdConfig.sectorSize))
       throw new Error('sectorSize changed: live reload refused to preserve sector ownership; use a planned war reset')
@@ -110,8 +246,8 @@ function fdTell(server, text, color) {
   fdCmd(server, `tellraw @a {"text":"[Фронт] ${safe}","color":"${color || 'gold'}"}`)
 }
 
-function fdLoadConfig() {
-  fdConfig = JsonIO.read(FD_CONFIG)
+function fdLoadConfig(server) {
+  fdConfig = fcWorldConfig(server, JsonIO.read(FD_CONFIG))
   if (!fdConfig) throw new Error(`Не найден ${FD_CONFIG}`)
   var major=Number(fdConfig.sectorSize),small=fdZoneSize()
   if(!isFinite(major) || !isFinite(small) || small<32 || major%small!==0 || major/small>8)
@@ -968,10 +1104,11 @@ function fdHqPayload(server, player) {
       (fdIsFrontier(sx, sz) ? 'Линия фронта' : (control > 0 ? 'Территория Warium' : 'Свободный сектор')))
   return {
     role: String(player.persistentData.getString('front_rp_role') || ''),
+    warPaused:server.persistentData.getBoolean('front_gm_paused'),
     callsign: String(player.persistentData.getString('front_rp_callsign') || ''),
     flag: String(player.persistentData.getString('front_rp_flag') || ''),
     enemyName: fdEnemyName(server), language: String(player.persistentData.getString('front_language') || 'ru'),
-    canEdit: player.hasPermissions(2),
+    canEdit: fcCanEdit(player),
     zoneCode: !fdInWarArea(player.x, player.z) ? 'outside' : (fdInSafeZone(player.x, player.z) ? 'safe' : (fdIsFrontier(sx, sz) ? 'front' : (control > 0 ? 'enemy' : 'free'))),
     stateName: fdStateName(player), sector: key+' / '+fdZoneLabel(sx,sz),control: Math.round(control), zone: zone,
     tacticalZone:fdKey(sx,sz),majorSector:key,
@@ -1081,7 +1218,7 @@ NetworkEvents.dataReceived('front:hq_request', event => {
   var server = player.server
   if (!fdInitialized && !fdInitialize(server)) return
   var action = String(event.data.action || 'refresh')
-  if (action === 'enemy_name' && player.hasPermissions(2)) {
+  if (action === 'enemy_name' && fcCanEdit(player)) {
     var enemyName = String(event.data.name || '').replace(/[\x00-\x1F\x7F§:]/g, '').trim()
     if (enemyName.length >= 3 && enemyName.length <= 32) server.persistentData.putString('front_enemy_name', enemyName)
   }
@@ -1273,7 +1410,7 @@ function fdUpdateLocalFront(server) {
 function fdInitialize(server) {
   if (fdInitialized) return true
   try {
-    fdLoadConfig()
+    fdLoadConfig(server)
     if (!fdConfig.enabled) return false
     fdCmd(server, 'scoreboard objectives add fd_tmp dummy')
     fdCmd(server, 'scoreboard objectives add front_sectors dummy')
@@ -1304,6 +1441,7 @@ ServerEvents.tick(event => {
   if (!fdInitialized && !fdInitialize(event.server)) return
   if (!fdConfig || !fdConfig.enabled) return
   fdTick++
+  if(event.server.persistentData.getBoolean('front_gm_paused'))return
   fdCombatTick++
   if (fdCombatTick % FD_AI_INTERVAL === 0) fdCombatNetwork(event.server)
   if (fdTick % FD_CHECK_TICKS !== 0) return
@@ -1499,4 +1637,30 @@ NetworkEvents.dataReceived('front:services_request',event=>{
   if(action==='mission') {fwMission(server,player,String(event.data.kind));tab='missions'}
   if(action==='cancel') {fwLoad(server);delete fwData.missions[fwPlayerKey(player)];fwSave(server);tab='missions'}
   fwSend(server,player,tab)
+})
+// Operator-only tools. Cosmetic ranks never grant access.
+NetworkEvents.dataReceived('front:admin_request',event=>{
+  var player=event.player,server=player.server
+  if(!fcCanEdit(player))return
+  if(!fdInitialized && !fdInitialize(server))return
+  var now=fdGameTime(server)
+  if(Number(player.persistentData.getLong('front_admin_next'))>now)return
+  player.persistentData.putLong('front_admin_next',now+10)
+  var action=String(event.data.action || '')
+  if(action==='pause_toggle')server.persistentData.putBoolean('front_gm_paused',!server.persistentData.getBoolean('front_gm_paused'))
+  else if(action==='control_plus' || action==='control_minus'){
+    var sx=fdSX(player.x),sz=fdSZ(player.z)
+    if(String(player.level.dimension)==='minecraft:overworld' && fdAllowedSector(sx,sz)){
+      fdSetControl(sx,sz,fdControl(sx,sz)+(action==='control_plus'?25:-25));fdRebuildSupply();fdSave(server)
+    }
+  }
+  else if(action==='supplies')fdCmd(server,'give '+String(player.username)+' kubejs:military_supply_crate 4')
+  else if(action==='heal')player.setHealth(player.getMaxHealth())
+  else if(action==='purge')fdPurgeCommand({source:{server:server,player:player}})
+  else if(action==='reset_arm')player.persistentData.putLong('front_reset_until',now+200)
+  else if(action==='reset' && Number(player.persistentData.getLong('front_reset_until'))>now){
+    player.persistentData.putLong('front_reset_until',0)
+    fdResetWar({source:{server:server,player:player}})
+  }
+  fdOpenHq(server,player)
 })

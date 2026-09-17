@@ -1,0 +1,13 @@
+{
+  "maxWarSide": 4096,
+  "defaultWarSide": 2048,
+  "defaultSafeRadius": 128,
+  "nbtBase": {
+    "enabled": false,
+    "template": "kubejs:starter_bunker",
+    "rotation": "none",
+    "offset": {"x": 0, "y": 0, "z": 0},
+    "size": {"x": 0, "y": 0, "z": 0},
+    "note": "Reserved configuration only. Automatic NBT placement is not implemented or enabled in this release."
+  }
+}
