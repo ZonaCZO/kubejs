@@ -1,11 +1,21 @@
+var fcPacketOnceRecent={}
+function fcPacketOnce(channel,data){
+ var now=Date.now(),key=channel+'|'+JSON.stringify(data)
+ if(fcPacketOnceRecent[key]!==undefined && now-fcPacketOnceRecent[key]<150)return false
+ fcPacketOnceRecent[key]=now
+ for(var oldKey in fcPacketOnceRecent)if(now-fcPacketOnceRecent[oldKey]>5000)delete fcPacketOnceRecent[oldKey]
+ Client.player.sendData(channel,data)
+ return true
+}
+function fcPageClick(page){return function(){fcUiPage=page;GuiJS.open('front:coop')}}
 var fcUiData={},fcUiPage='setup',fcUiName='',fcUiSide=2048,fcUiDir='north'
 var fcUiText={
  ru:{title:'НАСТРОЙКА КООПА',setup:'Территория',people:'Доступ',preview:'Предпросмотр',mode:'Режим ГМа',on:'ВКЛ',off:'ВЫКЛ',warA:'Зона БД: угол 1 здесь',warB:'Зона БД: угол 2 здесь',safeA:'Мирная зона: угол 1',safeB:'Мирная зона: угол 2',origin:'Очаг вторжения здесь',auto:'Создать вокруг меня',size:'Размер',direction:'Противник',clear:'Очистить черновик',arm:'Проверить и подтвердить',apply:'ПРИМЕНИТЬ',grant:'Назначить ГМом',revoke:'Отозвать права',name:'Ник игрока онлайн',denied:'Настраивает хост или назначенный ГМ',legend:'Схема: синий — война, зелёный — база, красный — очаг',north:'Север',south:'Юг',west:'Запад',east:'Восток',back:'Штаб',hint:'Применение заменит границы и поставит войну на паузу'},
  uk:{title:'НАЛАШТУВАННЯ КООПУ',setup:'Територія',people:'Доступ',preview:'Перегляд',mode:'Режим ГМа',on:'УВІМК',off:'ВИМК',warA:'Зона БД: кут 1 тут',warB:'Зона БД: кут 2 тут',safeA:'Мирна зона: кут 1',safeB:'Мирна зона: кут 2',origin:'Осередок вторгнення тут',auto:'Створити навколо мене',size:'Розмір',direction:'Противник',clear:'Очистити чернетку',arm:'Перевірити й підтвердити',apply:'ЗАСТОСУВАТИ',grant:'Призначити ГМом',revoke:'Відкликати права',name:'Нік гравця онлайн',denied:'Налаштовує хост або призначений ГМ',legend:'Схема: синій — війна, зелений — база, червоний — осередок',north:'Північ',south:'Південь',west:'Захід',east:'Схід',back:'Штаб',hint:'Застосування замінить межі й поставить війну на паузу'},
  en:{title:'CO-OP SETUP',setup:'Territory',people:'Access',preview:'Preview',mode:'GM mode',on:'ON',off:'OFF',warA:'War area: corner 1 here',warB:'War area: corner 2 here',safeA:'Safe area: corner 1',safeB:'Safe area: corner 2',origin:'Enemy origin here',auto:'Generate around me',size:'Size',direction:'Enemy',clear:'Clear draft',arm:'Validate and confirm',apply:'APPLY',grant:'Appoint GM',revoke:'Revoke access',name:'Online player name',denied:'Only host or appointed GM may configure',legend:'Diagram: blue war, green base, red origin',north:'North',south:'South',west:'West',east:'East',back:'HQ',hint:'Apply replaces boundaries and pauses the war'}
 }
-function fcUiSend(action,extra){var data=extra||{};data.action=action;Client.player.sendData('front:coop_request',data)}
-NetworkEvents.dataReceived('front:coop_data',event=>{fcUiData=event.data;GuiJS.open('front:coop')})
+function fcUiSend(action,extra){var data=extra||{};data.action=action;fcPacketOnce(action==='mode'?'front:gm_toggle':'front:coop_ui_request',data)}
+NetworkEvents.dataReceived('front:coop_data',event=>{fcUiData=event.data;fcUiData={language:event.data.getString('language'),active:event.data.getBoolean('active'),granted:event.data.getBoolean('granted'),owner:event.data.getBoolean('owner'),armed:event.data.getBoolean('armed'),paused:event.data.getBoolean('paused'),draft:event.data.getString('draft'),message:event.data.getString('message')};GuiJS.open('front:coop')})
 GUIEvents.createUI('front:coop',event=>{
  var t=fcUiText[String(fcUiData.language)]||fcUiText.ru,w=Math.min(400,Client.window.guiScaledWidth-8),h=Math.min(280,Client.window.guiScaledHeight-8)
  var x=Math.floor((Client.window.guiScaledWidth-w)/2),y=Math.floor((Client.window.guiScaledHeight-h)/2)
@@ -18,7 +28,7 @@ GUIEvents.createUI('front:coop',event=>{
  }
  event.label('§b§l'+t.title,x+12,y+10)
  var pages=['setup','people','preview']
- for(var i=0;i<pages.length;i++){let page=pages[i];event.button(t[page],x+12+i*126,y+28,120,18).onClick(()=>{fcUiPage=page;GuiJS.open('front:coop')})}
+ for(var i=0;i<pages.length;i++){var page=pages[i];event.button(t[page],x+12+i*126,y+28,120,18).onClick(fcPageClick(page))}
  function button(title,dx,dy,width,action,extra){event.button(title,x+dx,y+dy,width,18).onClick(()=>fcUiSend(action,extra))}
  button(t.mode+': '+(fcUiData.active?t.on:t.off),12,52,376,'mode')
  if(!fcUiData.granted)event.label('§7'+t.denied,x+12,y+82)
@@ -55,5 +65,5 @@ GUIEvents.createUI('front:coop',event=>{
   button(fcUiData.armed?'§c'+t.apply:t.arm,12,208,376,fcUiData.armed?'apply':'arm')
  }
  if(fcUiData.message)event.label('§e'+String(fcUiData.message).slice(0,62),x+12,y+234)
- event.button(t.back,x+12,y+254,376,18).onClick(()=>Client.player.sendData('front:hq_request',{action:'refresh'}))
+ event.button(t.back,x+12,y+254,376,18).onClick(()=>fcPacketOnce('front:hq_ui_request',{action:'refresh'}))
 })
